@@ -294,6 +294,25 @@ class FunctionDeclaration(AstNode):
 
     def __repr__(self):
         return f'FunctionDeclaration({self.name})'
+    
+
+class SectionBlock(AstNode):
+    """Bloque de sección marcado con @boveda o @code.
+    
+    El código sin anotación explícita al inicio del archivo pertenece a @code por defecto.
+    Las secciones pueden alternarse varias veces en el mismo archivo.
+    """
+
+    def __init__(self, annotation: str, body: list):
+        self.annotation = annotation
+        self.body       = body
+
+    @property
+    def children(self):
+        return self.body
+
+    def __repr__(self):
+        return f'SectionBlock({self.annotation})'
 
 
 class IfStatement(AstNode):
