@@ -2,7 +2,7 @@
 #    comentarios para ver si se borran
 
 const delta : uint = 0x9e3779b9'
-
+@boveda
 func tea_cifrar(v : [2] uint, llave : [4] uint) :: void {
     var v0 : uint = v[0]'
     var v1 : uint = v[1]'

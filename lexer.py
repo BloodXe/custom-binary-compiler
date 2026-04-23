@@ -1,4 +1,3 @@
-
 #para usar en temrinal: python lexer.py tea.yeison -v      (o sin -v)
 
 import sys
@@ -17,27 +16,18 @@ class TokenType(Enum):
     INT = auto();  UINT = auto();  BOOL = auto();  STRING = auto()
     REAL = auto(); VOID = auto()
 
-    #Autenticación HAYQ UUE REVISAR ESTAS
+    #Autenticación
     LOGIN    = auto()   # login(pwd)'   
     LOGOUT   = auto()   # logout()'      
     SETPWD   = auto()   # setpwd(pwd)'  
-    AUTHCHK  = auto()   # authchk()'     
+    AUTHCHK  = auto()   # authchk()'
+    AUTHORIZE = auto()
+    VKLOAD   = auto()   # vkload(slot, key)
+    VKINV    = auto()   # vkinv(slot)
 
-    #Bóveda de llaves REVISAR
-    SK   = auto()   # sk(slot, word, val)' 
-    INVK = auto()   # invk(slot)'         
-    SELK = auto()   # selk(slot)'          
-    CK     = auto()   # ck(slot)'            
-    DESELK = auto()   # deselk()'            
-    AUTHORIZE = auto()     
+    #Anotaciones
+    ANNOTATION = auto()  # @boveda  @code
 
-    #TEA REVISAR
-    TEA_ADD1 = auto()  
-    TEA_ADD2 = auto()  
-    TEA_ADD  = auto()  
-    TEA_SUB  = auto()  
-    TEA_XOR  = auto()   
- 
     #Identificadores
     IDENTIFIER     = auto()
     INTEGER        = auto()      # 42
@@ -121,22 +111,19 @@ class Lexer:
         'int':    TokenType.INT,    'uint':   TokenType.UINT,
         'bool':   TokenType.BOOL,   'string': TokenType.STRING,
         'real':   TokenType.REAL,   'void':   TokenType.VOID,
-        #Auth Unit
-        'login':   TokenType.LOGIN,   'logout':  TokenType.LOGOUT,
-        'setpwd':  TokenType.SETPWD,  'authchk': TokenType.AUTHCHK,
-        #Key Vault
-        'sk':   TokenType.SK,     'invk':      TokenType.INVK,
-        'selk': TokenType.SELK,   'ck':        TokenType.CK,
-        'deselk': TokenType.DESELK, 'authorize': TokenType.AUTHORIZE,
-        #TEA
-        'tea_add1': TokenType.TEA_ADD1, 'tea_add2': TokenType.TEA_ADD2,
-        'tea_add':  TokenType.TEA_ADD,  'tea_sub':  TokenType.TEA_SUB,
-        'tea_xor':  TokenType.TEA_XOR,
+        #Boveda de llaves
+        'login': TokenType.LOGIN,'logout': TokenType.LOGOUT,
+        'setpwd': TokenType.SETPWD,'authchk': TokenType.AUTHCHK,
+        'authorize': TokenType.AUTHORIZE,'vkload': TokenType.VKLOAD,
+        'vkinv': TokenType.VKINV,
     }
+
+    #Anotaciones válidas
+    VALID_ANNOTATIONS = {'boveda', 'code'}
 
     #Caracteres de sincronización para panic mode
     SYNC = set(
-        " \t\n\r'{}()[]#\"_"
+        " \t\n\r'{}()[]#\"@_"
         "0123456789"
         "abcdefghijklmnopqrstuvwxyz"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -274,6 +261,22 @@ class Lexer:
         self.advance()                          # consume "
         return Token(TokenType.STRING_LITERAL, val, sl, sc)
 
+    #Subautomata: anotaciones  @boveda  @code
+    #INICIO'@' a NOMBRE[a-z]+ a ACEPTAR
+    def read_annotation(self) -> Token:
+        sl, sc = self.line, self.col
+        self.advance()                          #consume @
+        name = ''
+        while self.current().isalnum() or self.current() == '_':
+            name += self.advance()
+        if not name:
+            self.errors.append((sl, sc, "Anotación vacía después de '@'"))
+            return Token(TokenType.ERROR, '@', sl, sc)
+        if name not in self.VALID_ANNOTATIONS:
+            self.errors.append((sl, sc, f"Anotación '@{name}' no reconocida"))
+            return Token(TokenType.ERROR, '@' + name, sl, sc)
+        return Token(TokenType.ANNOTATION, '@' + name, sl, sc)
+
     #SubautOmata: operadores y delimitadores
     def read_operator(self) -> Token:
         sl, sc = self.line, self.col
@@ -332,6 +335,7 @@ class Lexer:
         if ch.isalpha() or ch == '_': return self.read_identifier()
         if ch.isdigit():              return self.read_number()
         if ch == '"':                 return self.read_string()
+        if ch == '@':                 return self.read_annotation()
         return self.read_operator()
 
     def tokenize(self) -> List[Token]:
