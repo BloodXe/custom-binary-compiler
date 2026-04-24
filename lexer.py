@@ -381,36 +381,3 @@ class Lexer:
         else:
             print("\nFunciona acachete")
         
-
-
-
-def main():
-    import argparse
-    ap = argparse.ArgumentParser(description="Lexer Yeison")
-    ap.add_argument("archivo", help="Archivo fuente .yeison")
-    ap.add_argument("-v", "--verbose", action="store_true",
-                    help="Mostrar tabla completa de tokens")
-    args = ap.parse_args()
-
-    try:
-        with open(args.archivo, encoding='utf-8') as f:
-            source = f.read()
-    except FileNotFoundError:
-        print(f"Error: no se encontró '{args.archivo}'")
-        return 1
-
-    lexer  = Lexer(source)
-    tokens = lexer.tokenize()
-
-    if args.verbose:
-        lexer.print_tokens(tokens)
-    else:
-        total  = len(tokens) - 1
-        status = "Bien" if not lexer.errors else "mal"
-        print(f"{status}  {total} tokens  |  {len(lexer.errors)} errores  |  {args.archivo}")
-
-    return 0 if not lexer.errors else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
