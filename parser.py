@@ -306,6 +306,7 @@ class Parser:
     def parse_expr(self):
         """Punto de entrada para parsear cualquier expresión."""
         return self.parse_or()
+        
 
     def parse_or(self):
         """1 operador lógico: or"""
@@ -350,7 +351,6 @@ class Parser:
 
         return left
 
-
     def parse_bits(self):
         """5 operadores a nivel de bits: << >> & | ^"""
         BIT = {
@@ -358,17 +358,13 @@ class Parser:
             TokenType.OP_BIT_AND, TokenType.OP_BIT_OR,
             TokenType.OP_XOR
         }
-
         left = self.parse_suma()
-
         while self.match(*BIT):
             op = self.current().value
             self.pos += 1
             left = BinaryOp(left, op, self.parse_suma())
-
         return left
-
-
+    
     def parse_suma(self):
         """6 operadores suma y resta: + -"""
         left = self.parse_termino()
