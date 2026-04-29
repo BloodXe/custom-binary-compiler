@@ -1,0 +1,11 @@
+# asldkjfashdkfjh
+
+var x : int = 1'
+var j : int = 2'
+x = x + j'
+
+var suma : int = 0'
+
+para (i = 0' i < 32' i = i + 1') {
+        suma = suma + i'
+    }

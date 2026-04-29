@@ -1,8 +1,10 @@
 import sys
+
 from lexer     import Lexer
 from parser    import Parser, ParseError
 from ast_nodes import AstNode, FunctionDeclaration
 from semantic  import SemanticAnalyzer
+from asmgen import AsmGen
 
 
 def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
@@ -30,6 +32,8 @@ def main():
     ap.add_argument('-s', '--semantico',  action='store_true', help='Mostrar tabla de simbolos')
     ap.add_argument('-m', '--memoria',    action='store_true', help='Mostrar mapa de memoria')
     ap.add_argument('-e', '--etiquetas',  action='store_true', help='Mostrar etiquetas de salto')
+    ap.add_argument('-S', '--asm',        action='store_true', help='Generar código ASM')
+    ap.add_argument('-o', '--output', help='Archivo de salida')
     ap.add_argument('-a', '--all',        action='store_true', help='Mostrar todo')
     args = ap.parse_args()
 
@@ -40,6 +44,7 @@ def main():
         args.semantico = True
         args.memoria = True
         args.etiquetas = True
+        args.asm = True
 
     #se lee el archivo
     try:
@@ -73,8 +78,6 @@ def main():
         print_ast(ast)
 
 
-
-
     #Semantico
     sem = SemanticAnalyzer()
     sem.visit(ast)
@@ -96,6 +99,19 @@ def main():
             print(f'  {e}')
         return 1
 
+    # Code Generation
+    if args.asm:
+        gen = AsmGen(sem)
+        asm_code = gen.generate(ast)
+
+        print("\n=== ASM GENERADO ===\n")
+        print(asm_code)
+
+        # Guardar archivo si se pidió
+        if args.output:
+            with open(args.output, 'w') as f:
+                f.write(asm_code)
+            print(f"\nASM guardado en: {args.output}")
 
     return 0
 
