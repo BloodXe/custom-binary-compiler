@@ -1,0 +1,11 @@
+var a : int = 4'
+var b : int = 5'
+
+func suma(a : int, b : int) :: int {
+
+    a = a + b'
+    retorna a'
+}
+
+var x : int = 0'
+x = suma(3, 4)'

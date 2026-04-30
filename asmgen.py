@@ -12,9 +12,13 @@ class AsmGen:
         self.code = [] # Lista de instrucciones ensambladoras generadas
         self.temp_regs = ["r8", "r9", "r10", "r11"] # Registros temporales disponibles para cálculos intermedios
         self.reg_index = 0 # Indice para rastrear el siguiente registro temporal disponible
+        self.current_params = [] 
+        self.current_locals = {}   # name es offset
+        self.local_offset = 0      # tamaño acumulado
 
     # Genera código ensamblador a partir del AST
     def generate(self, ast):
+        self.code.append("addi r2, r0, 1024") # Inicializamos el stack pointer (r2) al final de la memoria disponible (1024 bytes)
         self.visit(ast)
         return "\n".join(self.code) # Devuelve el código ensamblador generado
     
@@ -94,18 +98,45 @@ class AsmGen:
     
     # Metodo para identificadores o variables, genera código ensamblador para cargar su valor en un registro temporal
     def visit_Identifier(self, node):
-        reg = self.new_reg()
-        addr = self.get_address(node.name) # Obtiene la dirección de la variable
-        self.code.append(f"load {reg}, {addr}") # Carga el valor de la variable en un registro temporal
-        return reg # Devuelve el registro temporal que contiene el valor de la variable
+        name = node.name
+
+        # Parametro de función, se carga desde el registro correspondiente (r4-r7) según su posición en la lista de parámetros actuales
+        if name in self.current_params:
+            idx = self.current_params.index(name)
+            return ["r4", "r5", "r6", "r7"][idx]
+
+        # Para variables locales
+        if name in self.current_locals:
+            offset = self.current_locals[name]
+
+            r = self.new_reg()
+            self.code.append(f"load {r}, {offset}(r2)")
+            return r
+
+        # Para variables globales, se carga su valor desde la dirección de memoria correspondiente usando load
+        addr = self.get_address(name)
+        r = self.new_reg()
+        self.code.append(f"load {r}, {addr}")
+        return r
     
     # Metodo para visitar un nodo de asignación, genera código ensamblador para evaluar el valor de la asignación y almacenarlo en la dirección de la variable 
     def visit_Assignment(self, node):
         reg = self.visit(node.value) # Genera código para evaluar el valor de la asignación
 
-        if isinstance(node.target, Identifier): # Si el objetivo de la asignación es un identificador, genera código para almacenar el valor en la dirección de la variable
-            addr = self.get_address(node.target.name) # Obtiene la dirección de la variable
-            self.code.append(f"store {reg}, {addr}") # Almacena el valor en la dirección de la variable
+        if isinstance(node.target, Identifier):
+            name = node.target.name
+
+            # Caso de parametro
+            if name in self.current_params:
+                idx = self.current_params.index(name)
+                reg_target = ["r4", "r5", "r6", "r7"][idx]
+
+                self.code.append(f"add {reg_target}, {reg}, r0")
+                return
+
+            # Caso de global
+            addr = self.get_address(name)
+            self.code.append(f"store {reg}, {addr}")
 
         elif isinstance(node.target, IndexAccess):
             # Dirección base del arreglo
@@ -361,17 +392,59 @@ class AsmGen:
     # Metodo para visitar un nodo de declaración de variable, genera código ensamblador para evaluar el valor inicial de la variable y almacenarlo en la dirección de la variable. 
     # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y se inicializa cada elemento del arreglo con su valor correspondiente.
     def visit_VarDeclaration(self, node):
-        # Obtenemos la dirección de la variable a partir de su nombre
-        addr = self.get_address(node.name)
+        name = node.name
 
-        # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y 
-        # se inicializa cada elemento del arreglo con su valor correspondiente
+        # Caso de variable local
+        if self.current_params:
+
+            # Tamano del array
+            if node.value.__class__.__name__ == "ListLiteral":
+                size = len(node.value.children) * 4
+            else:
+                size = 4
+
+            # reservar espacio en stack
+            self.code.append(f"addi r2, r2, {size}")
+            
+            # Guardamos el offset de la variable local en la tabla de variables locales, y actualizamos el offset acumulado para la siguiente variable local
+            base_offset = self.local_offset
+            self.current_locals[name] = base_offset
+            self.local_offset += size
+
+            # Para el caso del array local
+            if node.value.__class__.__name__ == "ListLiteral":
+
+                # Por cada elemento del arreglo
+                for i, elem in enumerate(node.value.children):
+                    r = self.visit(elem)
+
+                    offset = base_offset + (i * 4)
+
+                    # Calculamos la dirección de cada elemento del arreglo local con: 
+                    # addr = r2 - offset, donde r2 es el stack pointer y offset es el desplazamiento acumulado 
+                    # para la variable local actual más el desplazamiento para el elemento actual del arreglo (i * 4)
+                    r_addr = self.new_reg()
+                    self.code.append(f"addi {r_addr}, r2, -{self.local_offset - offset}")
+
+                    self.code.append(f"store {r}, 0({r_addr})")
+
+                return
+
+            # Para el caso de variable local normal
+            r = self.visit(node.value)
+            self.code.append(f"store {r}, -4(r2)")
+            return
+
+        # Caso de variable global
+        addr = self.get_address(name)
+
+        # Para el caso de arreglo global, se reserva espacio para el arreglo en memoria y se 
+        # inicializa cada elemento del arreglo con su valor correspondiente. 
+        # La dirección de cada elemento del arreglo se calcula como la dirección base de la variable global más el desplazamiento para el elemento actual del arreglo (i * 4)
         if node.value.__class__.__name__ == "ListLiteral":
-
-            # Dirección base del arreglo
             base_addr = addr
 
-            # Para cada elemento del arreglo, se genera código para evaluar su valor y almacenarlo en la dirección correspondiente del arreglo en memoria
+            # Por cada elemento del arreglo, se genera código para evaluar su valor y almacenarlo en la dirección correspondiente del arreglo en memoria
             for i, elem in enumerate(node.value.children):
                 r = self.visit(elem)
                 final_addr = base_addr + (i * 4)
@@ -379,9 +452,9 @@ class AsmGen:
 
             return
 
-        # Si la variable no es un arreglo, se genera código para evaluar su valor inicial y almacenarlo en la dirección de la variable
-        reg = self.visit(node.value)
-        self.code.append(f"store {reg}, {addr}")
+        # Para las variables globales normales
+        r = self.visit(node.value)
+        self.code.append(f"store {r}, {addr}")
 
     # Metodo para visitar un nodo de asignación, genera código ensamblador para evaluar el valor de la asignación y almacenarlo en la dirección de la variable o del elemento accedido del arreglo
     def visit_IndexAccess(self, node):
@@ -418,4 +491,85 @@ class AsmGen:
 
         return r_value
     
+
+
+    def visit_FunctionDeclaration(self, node):
+
+        # Agregamos una etiqueta para la función, que es el nombre de la función seguido de dos puntos
+        self.code.append(f"{node.name}:")
+
+        # Para cada parámetro de la función, guardamos su nombre en una lista de parámetros actuales 
+        # para poder cargar su valor desde el registro correspondiente (r4-r7) cuando se acceda a ellos dentro del cuerpo de la función
+        self.current_params = [p[0] for p in node.params]
+
+        # Si se agregan variables locales
+        self.current_locals = {}
+        self.local_offset = 0
+
+        has_return = False
+
+        # Generamos código para cada declaración o sentencia dentro del cuerpo de la función
+        for stmt in node.body:
+            result = self.visit(stmt)
+
+            if result == "RETURN":
+                break
+        if not has_return:
+            self.code.append("jr r1")
+
+        # Al final de la función, generamos código para retornar a la función llamante, 
+        # que consiste en saltar a la dirección almacenada en ra (r1)
+        self.code.append("jr r1")
+
+        # Limpiamos la lista de parámetros actuales y el conjunto de variables 
+        # locales al salir de la función, para evitar que afecten a otras funciones
+        self.current_params = []
+        self.current_locals = {}
+        self.local_offset = 0
+
+    # Funcion para llamada a funcion, genera código ensamblador para evaluar los argumentos de la llamada a función, almacenarlos en los registros correspondientes (r2, r3, etc.) y luego saltar a la etiqueta de la función llamada
+    def visit_FunctionCall(self, node):
+
+        # Guardamos ra (r1) para el retorno
+        self.code.append("store r1, 0(r2)") # Lo guardamos en la pila (r2 es el stack pointer)
+        self.code.append("addi r2, r2, 4") # Movemos el stack pointer para guardar el siguiente valor
+
+        # Guardamos los argumentos (r4-r7) para la función llamada
+        for reg in ["r4", "r5", "r6", "r7"]:
+            self.code.append(f"store {reg}, 0(r2)")
+            self.code.append("addi r2, r2, 4") # Movemos el stack pointer para guardar el siguiente argumento
+        
+        # Para pasar nuevos argumentos
+
+        arg_regs = ["r4", "r5", "r6", "r7"]
+
+        for i, arg in enumerate(node.args):
+            if i >= len(arg_regs):
+                raise Exception("Demasiados argumentos para la función (máximo 4)")
+
+            r_arg = self.visit(arg) # Evaluamos el argumento
+            self.code.append(f"add {arg_regs[i]}, {r_arg}, r0") # Guardamos el argumento en el registro correspondiente
+
+        # Para llamar a la función, saltamos a la etiqueta de la función llamada
+        self.code.append(f"jal r1, {node.name}") 
+
+        # Después de la llamada a función, restauramos los argumentos anteriores (r4-r7) y ra (r1) desde la pila
+        for reg in reversed(["r4", "r5", "r6", "r7"]):
+            self.code.append("addi r2, r2, -4") # Movemos el stack pointer para restaurar el siguiente argumento
+            self.code.append(f"load {reg}, 0(r2)")
+        
+        # Restauramos ra (r1)
+        self.code.append("addi r2, r2, -4")
+        self.code.append("load r1, 0(r2)")
+
+        # Retorno en r4
+        return "r4"
     
+    # Funcion para 
+    def visit_ReturnStatement(self, node):
+        r = self.visit(node.value)
+
+        self.code.append(f"add r4, {r}, r0")
+        self.code.append("jr r1")
+
+        return  "RETURN"
