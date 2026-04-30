@@ -9,3 +9,8 @@ var suma : int = 0'
 para (i = 0' i < 32' i = i + 1') {
         suma = suma + i'
     }
+
+var numeros: [3]uint = [1, 2, 3]'
+
+var a : uint = 0'
+a = numeros[1]'

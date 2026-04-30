@@ -2,7 +2,7 @@
 
 from platform import node
 import sys
-from ast_nodes import Identifier
+from ast_nodes import BinaryOp, Identifier, IndexAccess, IntLiteral
 
 # Compila el AST a código ensamblador
 class AsmGen:
@@ -66,7 +66,35 @@ class AsmGen:
         if isinstance(node.target, Identifier): # Si el objetivo de la asignación es un identificador, genera código para almacenar el valor en la dirección de la variable
             addr = self.get_address(node.target.name) # Obtiene la dirección de la variable
             self.code.append(f"store {reg}, {addr}") # Almacena el valor en la dirección de la variable
-    
+
+        elif isinstance(node.target, IndexAccess):
+            # Dirección base del arreglo
+            target = node.target.children[0]
+            base_addr = self.get_address(target.name)
+
+            # Indice del acceso al arreglo
+            idx_node = node.target.children[1]
+            r_index = self.visit(idx_node)
+
+            # Despues camiar a sizeof, por ahora asumiendo que cada elemento del arreglo ocupa 4 bytes, calculamos el tamaño de cada elemento
+            r_shift = self.new_reg()
+            self.code.append(f"addi {r_shift}, r0, 2")  # shift = 2
+            
+            # Calculamos el offset con: offset = índice * tamaño_elemento
+            r_offset = self.new_reg()
+            self.code.append(f"sll {r_offset}, {r_index}, {r_shift}")
+
+            # Calculamos la dirección del elemento accedido con: addr = base + offset
+            r_base = self.new_reg()
+            self.code.append(f"addi {r_base}, r0, {base_addr}")
+
+            r_addr = self.new_reg()
+            self.code.append(f"add {r_addr}, {r_base}, {r_offset}")
+
+            # Almacena el valor en la dirección del elemento accedido del arreglo
+            self.code.append(f"store {reg}, {r_addr}")
+
+
     # Metodo para visitar un nodo de operación binaria, genera código ensamblador para evaluar ambos operandos y realizar la operación correspondiente
     def visit_BinaryOp(self, node):
         r1 = self.visit(node.left) # Genera código para evaluar el operando izquierdo
@@ -79,7 +107,38 @@ class AsmGen:
         elif node.op == '-':
             self.code.append(f"sub {r3}, {r1}, {r2}") # Genera código para restar los operandos y almacenar el resultado en r3
         elif node.op == '*':
-            self.code.append(f"mul {r3}, {r1}, {r2}") # Genera código para multiplicar los operandos y almacenar el resultado en r3
+            # r1 = a, r2 = b
+
+            r_res = self.new_reg()
+            self.code.append(f"addi {r_res}, r0, 0")  # res = 0
+
+            # labels únicos
+            loop_lbl = f"mul_loop_{len(self.code)}"
+            end_lbl  = f"mul_end_{len(self.code)}"
+
+            # copia de b (porque lo vamos a modificar)
+            r_b = self.new_reg()
+            self.code.append(f"add {r_b}, {r2}, r0")
+
+            self.code.append(f"{loop_lbl}:")
+
+            # if b == 0 → salir
+            self.code.append(f"beq {r_b}, r0, {end_lbl}")
+
+            # res += a
+            self.code.append(f"add {r_res}, {r_res}, {r1}")
+
+            # b = b - 1
+            r_one = self.new_reg()
+            self.code.append(f"addi {r_one}, r0, 1")
+            self.code.append(f"sub {r_b}, {r_b}, {r_one}")
+
+            # loop
+            self.code.append(f"jal r0, {loop_lbl}")
+
+            self.code.append(f"{end_lbl}:")
+
+            return r_res
         elif node.op == '<<':
             self.code.append(f"sll {r3}, {r1}, {r2}") # Genera código para desplazar a la izquierda el operando izquierdo por el número de bits especificado en el operando derecho y almacenar el resultado en r3
         elif node.op == '>>':
@@ -93,48 +152,111 @@ class AsmGen:
     # Metodo para If statements, genera código ensamblador para evaluar la condición del if y saltar al bloque else si la condición es falsa, o ejecutar el bloque then si la condición es verdadera. 
     # Al final del bloque then, genera código para saltar al final del bloque if después de ejecutar el bloque then. Luego genera código para el bloque else y el final del bloque if.
     def visit_IfStatement(self, node):
-        else_label = node._lbl_else # Etiqueta para el bloque else
-        end_label = node._lbl_end # Etiqueta para el final del bloque if
+        # Etiquetas únicas para el bloque else y el final del bloque if
+        else_label = node._lbl_else
+        end_label  = node._lbl_end
 
-        reg = self.visit(node.condition) # Genera código para evaluar la condición del if
+        # Evaluamos la condición del if
+        cond = node.condition
 
-        # Si la condición es falsa, salta al bloque else
-        self.code.append(f"beq {reg}, r0, {else_label}") # Genera código para saltar al bloque else si la condición es falsa
-    
-        for stmt in node.then_block: # Genera código para el bloque then
+        # Caso: condición con operador de comparación (e.g. i < N, i == N, etc.)
+        if isinstance(cond, BinaryOp):
+
+            # Generamos código para evaluar ambos operandos de la condición
+            r1 = self.visit(cond.left)
+            r2 = self.visit(cond.right)
+
+            # Si la condición es falsa, saltamos al bloque else
+            if cond.op == '<':
+                self.code.append(f"bge {r1}, {r2}, {else_label}")
+
+            elif cond.op == '>':
+                self.code.append(f"bge {r2}, {r1}, {else_label}")
+
+            elif cond.op == '==':
+                self.code.append(f"bne {r1}, {r2}, {else_label}")
+
+            elif cond.op == '!=':
+                self.code.append(f"beq {r1}, {r2}, {else_label}")
+
+            else:
+                raise Exception(f"Operador no soportado en if: {cond.op}")
+
+        # Caso: Con booleanos o variables booleanas, evaluamos la condición y saltamos al bloque else si el resultado es falso (0)
+        else:
+            
+            r = self.visit(cond)
+            self.code.append(f"beq {r}, r0, {else_label}")
+
+        # Bloque then
+        for stmt in node.then_block:
             self.visit(stmt)
-        
-        self.code.append(f"jal r0, {end_label}") # Genera código para saltar al final del bloque if después de ejecutar el bloque then
 
-        # Genera código para el bloque else
-        self.code.append(f"{else_label}:") # Etiqueta para el bloque else
+        # Al final del bloque then, saltamos al final del bloque if para evitar ejecutar el bloque else
+        self.code.append(f"jal r0, {end_label}")
 
-        for stmt in node.else_block: # Genera código para el bloque else
+        # Bloque else
+        self.code.append(f"{else_label}:")
+        for stmt in node.else_block:
             self.visit(stmt)
-        
-        self.code.append(f"{end_label}:") # Etiqueta para el final del bloque if
-    
+
+        # Final del bloque if
+        self.code.append(f"{end_label}:")
+
+
     # Metodo para While statements, genera código ensamblador para evaluar la condición del while al inicio de cada iteración y saltar al final del bloque while si la condición es falsa, o ejecutar el bloque while si la condición es verdadera. 
     # Al final del bloque while, genera código para saltar al inicio del bloque while para evaluar la condición nuevamente.
     def visit_WhileStatement(self, node):
-        start = node._lbl_start # Etiqueta para el inicio del bloque while
-        end = node._lbl_end # Etiqueta para el final del bloque while
-
-        self.code.append(f"{start}:") # Etiqueta para el inicio del bloque while
-
-        r = self.visit(node.condition) # Genera código para evaluar la condición del while
-
-        # Si la condición es falsa, salta al final del bloque while
-        self.code.append(f"beq {r}, r0, {end}") # Genera código para saltar al final del bloque while si la condición es falsa
-
-        for stmt in node.body: # Genera código para el bloque while
-            self.visit(stmt)
+        # Etiquetas únicas para el inicio y el final del bloque while
+        start = node._lbl_start
+        end   = node._lbl_end
         
-        # Se vuelve al inicio del bloque while para evaluar la condición nuevamente
-        self.code.append(f"jal r0, {start}") # Genera código para saltar al inicio del bloque while para evaluar la condición nuevamente
+        # Se etiqueta el inicio del bloque while
+        self.code.append(f"{start}:")
 
-        self.code.append(f"{end}:") # Etiqueta para el final del bloque while
+        # Evaluamos la condición del while
+        cond = node.condition
 
+        # Caso: condición con operador de comparación (e.g. i < N, i == N, etc.)
+        if isinstance(cond, BinaryOp):
+
+            # Generamos código para evaluar ambos operandos de la condición
+            r1 = self.visit(cond.left)
+            r2 = self.visit(cond.right)
+
+            # Si la condicion es falsa, saltamos al final del bloque while
+            if cond.op == '<':
+                self.code.append(f"bge {r1}, {r2}, {end}")
+
+            elif cond.op == '>':
+                self.code.append(f"bge {r2}, {r1}, {end}")
+
+            elif cond.op == '==':
+                self.code.append(f"bne {r1}, {r2}, {end}")
+
+            elif cond.op == '!=':
+                self.code.append(f"beq {r1}, {r2}, {end}")
+
+            else:
+                raise Exception(f"Operador no soportado en while: {cond.op}")
+
+        # Caso: Con booleanos o variables booleanas, evaluamos la condición y saltamos al final del bloque while si el resultado es falso (0)
+        else:
+            r = self.visit(cond)
+            self.code.append(f"beq {r}, r0, {end}")
+
+        # Bloque del while
+        for stmt in node.body:
+            self.visit(stmt)
+
+        self.code.append(f"jal r0, {start}")
+
+        # Se etiqueta el final del bloque while
+        self.code.append(f"{end}:")
+
+
+    # Metodo para For statements, genera código ensamblador para evaluar la condición del for al inicio de cada iteración y saltar al final del bloque for si la condición es falsa, o ejecutar el bloque for si la condición es verdadera. 
+    # Al final del bloque for, genera código para ejecutar la actualización del for y luego saltar al inicio del bloque for para evaluar la condición nuevamente.
     def visit_ForStatement(self, node):
         start = node._lbl_start # Etiqueta para el inicio del bloque for
         end   = node._lbl_end # Etiqueta para el final del bloque for
@@ -196,7 +318,27 @@ class AsmGen:
         # Se etiqueta el final del bloque for
         self.code.append(f"{end}:")
     
+    # Metodo para visitar un nodo de declaración de variable, genera código ensamblador para evaluar el valor inicial de la variable y almacenarlo en la dirección de la variable. 
+    # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y se inicializa cada elemento del arreglo con su valor correspondiente.
     def visit_VarDeclaration(self, node):
+
+        addr = self.get_address(node.name)
+
+        # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y se inicializa cada elemento del arreglo con su valor correspondiente
+        if node.value.__class__.__name__ == "ListLiteral":
+            base_addr = addr
+
+            for i, elem in enumerate(node.value.children):
+                # Evaluar elemento
+                r = self.visit(elem)
+
+                # offset = i * 4
+                offset = i * 4
+                final_addr = base_addr + offset
+
+                self.code.append(f"store {r}, {final_addr}")
+
+            return
 
         # Evaluamos el valor inicial de la variable
         reg = self.visit(node.value) # Genera código para evaluar el valor inicial de la variable
@@ -206,3 +348,38 @@ class AsmGen:
 
         # Almacenamos el valor inicial de la variable en su dirección de memoria
         self.code.append(f"store {reg}, {addr}") # Genera código para almacenar el valor inicial de la variable en su dirección de memoria
+
+    # Metodo para visitar un nodo de asignación, genera código ensamblador para evaluar el valor de la asignación y almacenarlo en la dirección de la variable o del elemento accedido del arreglo
+    def visit_IndexAccess(self, node):
+        
+        # Obtenemos la dirección base del arreglo
+        target = node.children[0]
+        base_addr = self.get_address(target.name)
+
+        # Evaluamos el índice del acceso al arreglo
+        idx_node = node.children[1]
+        r_index = self.visit(idx_node)
+
+
+        # Despues camiar a sizeof, por ahora asumiendo que cada elemento del arreglo ocupa 4 bytes, calculamos el tamaño de cada elemento
+        # Asumiendo que cada elemento del arreglo ocupa 4 bytes, calculamos el tamaño de cada elemento
+        r_size = self.new_reg()
+        self.code.append(f"addi {r_size}, r0, 4")
+
+        # Calculamos el offset con: offset = índice * tamaño_elemento
+        r_offset = self.new_reg()
+        self.code.append(f"addi {r_size}, r0, 2")
+        self.code.append(f"sll {r_offset}, {r_index}, {r_size}")
+
+        # Calculamos la dirección del elemento accedido con: addr = base + offset
+        r_base = self.new_reg()
+        self.code.append(f"addi {r_base}, r0, {base_addr}")
+
+        r_addr = self.new_reg()
+        self.code.append(f"add {r_addr}, {r_base}, {r_offset}")
+
+        # Cargamos el valor del elemento accedido del arreglo en un registro temporal
+        r_value = self.new_reg()
+        self.code.append(f"load {r_value}, {r_addr}")
+
+        return r_value
