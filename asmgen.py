@@ -46,11 +46,51 @@ class AsmGen:
 
     # Literales
 
-    # Metodo para visitar un nodo de literal entero y generar código ensamblador para cargar su valor en un registro temporal
+    # Método para cargar un valor inmediato en un registro, maneja tanto valores pequeños que pueden ser cargados directamente con addi, como valores grandes que requieren cargar byte por byte con lli
+    def load_immediate(self, value):
+        r = self.new_reg()
+
+        # Si el valor es pequeño (0 <= value < 2048), lo cargamos directamente con addi
+        if 0 <= value < 2048:
+            self.code.append(f"addi {r}, r0, {value}")
+            return r
+
+        # Si el valor es grande, lo cargamos byte por byte con lli. Primero inicializamos el registro a 0, y luego cargamos cada byte del valor en su posición correspondiente usando lli y shift.
+        self.code.append(f"addi {r}, r0, 0")
+
+        # Lista de bytes del valor, donde cada byte se obtiene desplazando el valor a la derecha y 
+        # aplicando una máscara para obtener solo el byte correspondiente
+        bytes_list = [
+            (value >> 0)  & 0xFF,
+            (value >> 8)  & 0xFF,
+            (value >> 16) & 0xFF,
+            (value >> 24) & 0xFF
+        ]
+
+        # Cargamos cada byte del valor en su posición correspondiente usando lli, donde el desplazamiento se calcula como el índice del byte multiplicado por 8 (porque cada byte tiene 8 bits)
+        for i, byte in enumerate(bytes_list):
+            # Si el byte es 0, no es necesario cargarlo, ya que el registro ya fue inicializado a 0. 
+            if byte != 0:
+                self.code.append(f"lli {r}, {byte}, {i}")
+
+        return r
+
+    # Funcion para visitar un nodo de literal entero, genera código ensamblador para cargar el valor del literal en un registro temporal
     def visit_IntLiteral(self, node):
-        reg = self.new_reg()
-        self.code.append(f"addi {reg}, r0, {node.value}") # Carga el valor entero en un registro temporal
-        return reg # Devuelve el registro temporal que contiene el valor entero
+        return self.load_immediate(node.value)
+
+    # Funcion para visitar un nodo de literal hexadecimal, genera código ensamblador para cargar el valor del literal en un registro temporal
+    def visit_HexLiteral(self, node):
+
+        # Si el valor del literal hexadecimal es una cadena, lo convertimos a entero asumiendo que la cadena representa un número hexadecimal (e.g. "0x1A" → 26)
+        if isinstance(node.value, str):
+            value = int(node.value, 16)
+        
+        # Si el valor del literal hexadecimal ya es un entero, lo usamos directamente
+        else:
+            value = node.value
+
+        return self.load_immediate(value)
     
     # Metodo para identificadores o variables, genera código ensamblador para cargar su valor en un registro temporal
     def visit_Identifier(self, node):
@@ -321,33 +361,27 @@ class AsmGen:
     # Metodo para visitar un nodo de declaración de variable, genera código ensamblador para evaluar el valor inicial de la variable y almacenarlo en la dirección de la variable. 
     # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y se inicializa cada elemento del arreglo con su valor correspondiente.
     def visit_VarDeclaration(self, node):
-
+        # Obtenemos la dirección de la variable a partir de su nombre
         addr = self.get_address(node.name)
 
-        # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y se inicializa cada elemento del arreglo con su valor correspondiente
+        # Si la variable es un arreglo, se reserva espacio para el arreglo en memoria y 
+        # se inicializa cada elemento del arreglo con su valor correspondiente
         if node.value.__class__.__name__ == "ListLiteral":
+
+            # Dirección base del arreglo
             base_addr = addr
 
+            # Para cada elemento del arreglo, se genera código para evaluar su valor y almacenarlo en la dirección correspondiente del arreglo en memoria
             for i, elem in enumerate(node.value.children):
-                # Evaluar elemento
                 r = self.visit(elem)
-
-                # offset = i * 4
-                offset = i * 4
-                final_addr = base_addr + offset
-
+                final_addr = base_addr + (i * 4)
                 self.code.append(f"store {r}, {final_addr}")
 
             return
 
-        # Evaluamos el valor inicial de la variable
-        reg = self.visit(node.value) # Genera código para evaluar el valor inicial de la variable
-
-        # Obtenemos la dirección de la variable
-        addr = self.get_address(node.name) 
-
-        # Almacenamos el valor inicial de la variable en su dirección de memoria
-        self.code.append(f"store {reg}, {addr}") # Genera código para almacenar el valor inicial de la variable en su dirección de memoria
+        # Si la variable no es un arreglo, se genera código para evaluar su valor inicial y almacenarlo en la dirección de la variable
+        reg = self.visit(node.value)
+        self.code.append(f"store {reg}, {addr}")
 
     # Metodo para visitar un nodo de asignación, genera código ensamblador para evaluar el valor de la asignación y almacenarlo en la dirección de la variable o del elemento accedido del arreglo
     def visit_IndexAccess(self, node):
@@ -361,15 +395,15 @@ class AsmGen:
         r_index = self.visit(idx_node)
 
 
-        # Despues camiar a sizeof, por ahora asumiendo que cada elemento del arreglo ocupa 4 bytes, calculamos el tamaño de cada elemento
+        # Despues cambiar a sizeof, por ahora asumiendo que cada elemento del arreglo ocupa 4 bytes, calculamos el tamaño de cada elemento
         # Asumiendo que cada elemento del arreglo ocupa 4 bytes, calculamos el tamaño de cada elemento
-        r_size = self.new_reg()
-        self.code.append(f"addi {r_size}, r0, 4")
+        # shift = 2 (porque *4)
+        r_shift = self.new_reg()
+        self.code.append(f"addi {r_shift}, r0, 2")
 
         # Calculamos el offset con: offset = índice * tamaño_elemento
         r_offset = self.new_reg()
-        self.code.append(f"addi {r_size}, r0, 2")
-        self.code.append(f"sll {r_offset}, {r_index}, {r_size}")
+        self.code.append(f"sll {r_offset}, {r_index}, {r_shift}")
 
         # Calculamos la dirección del elemento accedido con: addr = base + offset
         r_base = self.new_reg()
@@ -383,3 +417,5 @@ class AsmGen:
         self.code.append(f"load {r_value}, {r_addr}")
 
         return r_value
+    
+    
