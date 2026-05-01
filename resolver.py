@@ -26,6 +26,7 @@ class Resolver:
     # Segunda pasada por las instrucciones  
     def labels_rewrite(self):
         new_code = []
+        actual_pc = 0
 
         for i in self.asm:
             i = i.strip()
@@ -38,9 +39,11 @@ class Resolver:
 
             for label, address in self.labels.items():  # Se cicla por label y su dirección
                 if label in i:        # Si se reconoce el label en i (actual linea)
-                    i = i.replace(label, str(address))    # Intercambia el i, y el label por su dirección 
+                    offset = (address - actual_pc) // self.instruction_size  # Calcula el offset dividiendo la diferencia de direcciones entre el tamaño de la instrucción
+                    i = i.replace(label, str(offset))    # Intercambia el i, y el label por su offset
             
             new_code.append(i)     # mete a la lista nueva la linea leída ya sea con el cambio o no
+            actual_pc += self.instruction_size   # Suma el tamaño de la instrucción para la siguiente iteración
             
         return new_code
     
