@@ -1,7 +1,0 @@
-var x : int = 10'
-
-func foo() :: int{
-    var x : int = 5'
-    var y : int = 7'
-    retorna x + y'
-}

@@ -1,0 +1,8 @@
+var x : int = 4'
+
+func test()::void{
+
+    var x : int = 1'
+    var y : int = 2'
+    var z : int = 3'
+}

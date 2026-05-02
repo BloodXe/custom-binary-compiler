@@ -1,0 +1,7 @@
+func test() :: void {
+    var x : int = 0'
+    
+    mientras (x < 3) {
+        x = x + 1'
+    }
+}
