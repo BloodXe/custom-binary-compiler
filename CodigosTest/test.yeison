@@ -1,0 +1,23 @@
+# asldkjfashdkfjh
+
+var x : int = 1'
+var j : int = 2'
+x = x + j'
+
+var suma : int = 0'
+
+para (i = 0' i < 10' i = i + 1') {
+        suma = suma + i'
+    }
+
+var numeros: [3]uint = [1, 2, 3]'
+
+
+var y: int = 0'
+
+func suma(a:int, b:int)::int{
+
+    retorna a + b + 4'
+}
+
+suma(4, 5)'

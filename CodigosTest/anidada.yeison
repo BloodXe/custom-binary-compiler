@@ -1,0 +1,7 @@
+func suma(a:int, b:int) :: int {
+    retorna a + b'
+}
+
+func test() :: void {
+    var x : int = suma( suma(1,2), 3 )'
+}

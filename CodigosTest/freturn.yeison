@@ -1,0 +1,4 @@
+func foo() :: int {
+    var x : int = 5'
+    retorna x'
+}
