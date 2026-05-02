@@ -1,11 +1,7 @@
-var a : int = 4'
-var b : int = 5'
+var x : int = 10'
 
-func suma(a : int, b : int) :: int {
-
-    a = a + b'
-    retorna a'
+func foo() :: int{
+    var x : int = 5'
+    var y : int = 7'
+    retorna x + y'
 }
-
-var x : int = 0'
-x = suma(3, 4)'
