@@ -52,33 +52,58 @@ class AsmGen:
     # Funcion principal de generación de código: recibe el AST completo y retorna el código ensamblador como string
     def generate(self, ast) -> str:
         """
-        Hace dos pasadas:
-          Pasada 1: Recorre el AST calculando qué instrucciones se generarán
-                     y asigna la dirección real de cada función en la tabla de símbolos.
-          Pasada 2: Genera el código ensamblador real.
+        Orden de emisión:
+          1. init SP
+          2. inicializar globals  ← aquí, antes de saltar a main
+          3. jal main / halt
+          4. código de funciones
         """
-        # Pasada 1: calcular direcciones de funciones
+        # Pasada 1: asignar direcciones reales a funciones
         self._assign_function_addresses(ast)
-
-        # Pasada 2: generar código 
-        # Inicializar el stack pointer al tope de la memoria (64 KB)
-        self._emit("addi r2, r0, ")   # 0xE000 (última word alineada de 64 KB)
-
-        # Saltar a main si existe, para no caer en el código de otras funciones
+ 
+        # 1. Init SP
+        self._emit("addi r2, r0, 57344") # SP inicial en 0xE000 para dejar espacio para el archivo
+ 
+        # 2. Globals: recorrer solo declaraciones de nivel superior
+        self._emit_blank()
+        self._emit_label("# --- inicialización de variables globales ---")
+        for section in self._sections(ast):
+            for node in section:
+                if isinstance(node, (VarDeclaration, ConstDeclaration)):
+                    self.visit(node)
+ 
+        # 3. Saltar a main (si existe) o simplemente halt
+        self._emit_blank()
         main_sym = self.semantic.symbol_table.lookup("main")
         if main_sym is not None:
             self._emit("jal r1, main")
             self._emit("halt")
+ 
+        # 4. Funciones (y cualquier otra sentencia que no sea global)
+        self._emit_blank()
+        self._emit_label("# --- funciones ---")
+        for section in self._sections(ast):
+            for node in section:
+                if not isinstance(node, (VarDeclaration, ConstDeclaration,
+                                         ImportStatement)):
+                    self.visit(node)
 
-        self.visit(ast)
-
-        # Si no hay main, agregar halt al final
         if main_sym is None:
             self._emit("halt")
 
         return "\n".join(self.code)
 
-   
+    # Helper para iterar sobre las secciones del programa: maneja tanto programas con secciones 
+    # @code/@boveda como programas sin secciones (donde el cuerpo es directamente el programa)
+    def _sections(self, ast):
+        """Itera sobre las listas de sentencias de cada sección del programa."""
+        for stmt in (ast.statements if hasattr(ast, 'statements') else [ast]):
+            if hasattr(stmt, 'body'):
+                yield stmt.body
+            else:
+                yield [stmt]
+
+
     # Pasada 1: asignación de direcciones de funciones                   #
     def _assign_function_addresses(self, ast):
         """
@@ -157,6 +182,9 @@ class AsmGen:
     def _emit_label(self, label: str):
         """Agrega una etiqueta (no cuenta como instrucción para el PC)."""
         self.code.append(f"{label}:")
+
+    def _emit_blank(self):
+        self.code.append("")
 
     # Gestión de registros temporales: asignación y liberación para evitar colisiones en expresiones anidadas
     def _alloc_reg(self) -> str:
@@ -540,22 +568,25 @@ class AsmGen:
         self._emit(f"addi {r_res}, r0, 0")
         self._emit(f"add  {r_cnt}, {r_b}, r0")
 
+        self._free_if_temp(r_b) # Liberar el registro temporal de b, ya que tenemos una copia en r_cnt
+
+        
+
+        r_one = self._alloc_reg()                 # ahora hay espacio
+        self._emit(f"addi {r_one}, r0, 1")
+
         self._emit_label(lbl_loop)
         self._emit(f"beq  {r_cnt}, r0, {lbl_end}")
         self._emit(f"add  {r_res}, {r_res}, {r_a}")
-
-        r_one = self._alloc_reg()
-        self._emit(f"addi {r_one}, r0, 1")
         self._emit(f"sub  {r_cnt}, {r_cnt}, {r_one}")
-        self._free_reg(r_one)
-
         self._emit(f"jal  r0, {lbl_loop}")
         self._emit_label(lbl_end)
 
         self._free_if_temp(r_a)
-        self._free_if_temp(r_b)
+        self._free_reg(r_one)
         self._free_reg(r_cnt)
         return r_res
+
 
     # Para UnaryOp, manejamos operadores unarios como negación, NOT lógico y NOT a nivel de bits.
     def visit_UnaryOp(self, node) -> str:
@@ -958,10 +989,10 @@ class AsmGen:
             elif op == '!=':
                 self._emit(f"beq {r1}, {r2}, {lbl_false}")
             elif op == '<=':
-                # saltar si r1 > r2  ↔  r2 < r1  ↔  bgt r1, r2
+                # saltar si r1 > r2  =  r2 < r1  =  bgt r1, r2
                 self._emit(f"bgt {r1}, {r2}, {lbl_false}")
             elif op == '>=':
-                # saltar si r1 < r2  ↔  bgt r2, r1
+                # saltar si r1 < r2  =  bgt r2, r1
                 self._emit(f"bgt {r2}, {r1}, {lbl_false}")
             elif op == 'and':
                 # ambos deben ser true (!=0); si alguno es 0, saltar a falso
@@ -1026,6 +1057,31 @@ class AsmGen:
         lbl_start = node._lbl_start
         lbl_end   = node._lbl_end
 
+        # Pre-registrar la variable de control como local si no existe
+        if isinstance(node.init, Assignment):
+            
+            target = node.init.target
+
+            # Si el target de la asignación es un Identifier, verificamos si ya existe como local o parámetro; 
+            # si no, lo pre-registramos como una nueva variable local en el frame para que pueda ser usada dentro del loop.
+            if isinstance(target, Identifier):
+                var_name = target.name
+
+                # Si la variable de control no está ya declarada como local ni es un parámetro, 
+                # la pre-registramos como una nueva variable local en el frame del loop.
+                if (var_name not in self.current_locals and var_name not in self.current_params):
+
+                    self._emit(f"addi r2, r2, -4")
+
+                    # Para mantener los offsets relativos correctos, incrementamos en 4 el offset de todas 
+                    # las variables locales preexistentes (ya que el frame crece hacia abajo), y luego 
+                    # registramos la nueva variable local con un offset de 0 (el nuevo tope del frame).
+                    for k in list(self.current_locals):
+                        self.current_locals[k] += 4
+                    
+                    self.current_locals[var_name] = 0
+                    self.local_offset += 4
+
         self.visit(node.init)
         self._emit_label(lbl_start)
         self._emit_branch_condition(node.condition, lbl_end)
@@ -1037,6 +1093,7 @@ class AsmGen:
         self.visit(node.update)
         self._emit(f"jal r0, {lbl_start}")
         self._emit_label(lbl_end)
+
 
     
     #  Funciones: Para declarar una función, guardamos su contexto (parámetros, variables locales, offset del frame) y emitimos su etiqueta.
