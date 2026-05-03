@@ -238,7 +238,7 @@ Ejemplos:
     
     # Fase 6: Generación de binario
     if args.binario:
-        hex_path = (base_name + '.hex') if args.hex else None
+        hex_path = (base_name + '.mem') if args.hex else None
         bin_path = base_name + '.bin'
 
         bg = BinaryGen(resolved_asm)

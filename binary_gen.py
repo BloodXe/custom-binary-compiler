@@ -413,21 +413,10 @@ class BinaryGen:
         return True
 
     def _hex_dump(self) -> str:
-        """
-        Hex dump legible para debugging.
-        Formato por línea:
-          0x0000  00000000  00000000000000000000000  addi r2, r0, 65532
-        """
-        lines = ["ADDR      HEX        BINARIO (23 bits)         ",
-                 "-" * 55]
+        lines = []
         for i, w in enumerate(self.words):
-            addr    = i * 4
-            bin_str = to_bin23(w)
-            # Agrupar bits por campos para legibilidad
-            grouped = (f"{bin_str[0:4]} {bin_str[4:8]} "
-                       f"{bin_str[8:12]} {bin_str[12:16]} "
-                       f"{bin_str[16:19]} {bin_str[19:23]}")
-            lines.append(f"0x{addr:04X}  {w:06X}  {grouped}")
+            asm_line = self.lines[i] if i < len(self.lines) else ""
+            lines.append(f"{w:06X} // {asm_line}")
         return "\n".join(lines)
 
     def preview(self) -> list:

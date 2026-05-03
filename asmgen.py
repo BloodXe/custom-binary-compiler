@@ -62,10 +62,8 @@ class AsmGen:
         self._assign_function_addresses(ast)
  
         # 1. Init SP
-        self._emit("lli r2, 0, 0")
-        self._emit("lli r2, 0, 1")
-        self._emit("lli r2, 0xE0, 2")
-        self._emit("lli r2, 0, 3")
+        self._emit("lli r2, 0, 0")    # r2[7:0]  = 0x00
+        self._emit("lli r2, 0xE0, 1") # r2[15:8] = 0xE0  → r2 = 0xE000
  
         # 2. Globals: recorrer solo declaraciones de nivel superior
         self._emit_blank()
@@ -630,44 +628,44 @@ class AsmGen:
     # Función principal para visitar llamadas a función: maneja tanto llamadas normales como 
     # instrucciones de bóveda (que se emiten directamente como mnemónicas ISA)
     def visit_FunctionCall(self, node) -> str:
-        """
-        Llamada a función normal (no bóveda):
-          1. PUSH ra (r1) en stack
-          2. Evaluar argumentos (r4..r7)
-          3. jal r1, nombre
-          4. POP ra
-          Retorno en r4.
-        """
-        # PUSH return address
+        # PUSH ra: bajar SP y guardar r1
+        # Antes de bajar SP, ajustar offsets locales para que sigan
+        # apuntando correctamente después del PUSH
+        for k in self.current_locals:
+            self.current_locals[k] += 4
+        self.local_offset += 4
+ 
         self._emit("addi r2, r2, -4")
-        self._emit("store r1, 0(r2)") # Restamos porque estamos en el stack
-
-        # Evaluar argumentos y colocarlos en los registros de argumento (r4..r7) según la convención del ISA
+        self._emit("store r1, 0(r2)")
+ 
+        # Evaluar argumentos y colocarlos en r4..r7
         for i, arg in enumerate(node.args):
-
-            # Si se exceden los registros de argumento disponibles, lanzamos una excepción (no soportamos más de 4 argumentos)
             if i >= len(ARG_REGS):
                 raise RuntimeError(
-                    f"Llamada a '{node.name}': máximo {len(ARG_REGS)} argumentos, "
-                    f"se dieron {len(node.args)}"
+                    f"'{node.name}': máx {len(ARG_REGS)} args, "
+                    f"se pasaron {len(node.args)}"
                 )
-            
-            r_arg = self.visit(arg) # Evaluar el argumento y obtener su valor en un registro
-            self._emit(f"add {ARG_REGS[i]}, {r_arg}, r0") # Mover el valor del argumento al registro de argumento correspondiente (r4..r7)
-            self._free_if_temp(r_arg) # Liberar el registro temporal usado para evaluar el argumento
-
-        # Llamada a función: jal r1, nombre
+            r_arg = self.visit(arg)
+            self._emit(f"add {ARG_REGS[i]}, {r_arg}, r0")
+            self._free_if_temp(r_arg)
+ 
+        # Llamada
         self._emit(f"jal r1, {node.name}")
-
-        # POP return address
+ 
+        # POP ra: restaurar r1 y subir SP
         self._emit("load r1, 0(r2)")
         self._emit("addi r2, r2, 4")
-
-        # El valor de retorno queda en r4 (a0)
-        # Lo copiamos a un temporal para que el caller pueda usarlo
+ 
+        # Restaurar offsets locales al valor anterior al PUSH
+        for k in self.current_locals:
+            self.current_locals[k] -= 4
+        self.local_offset -= 4
+ 
+        # Copiar retorno a temporal
         r_ret = self._alloc_reg()
         self._emit(f"add {r_ret}, r4, r0")
         return r_ret
+
 
     # Para las llamadas a función usadas como sentencias (sin usar el valor de retorno), manejamos las instrucciones de bóveda directamente 
     # y para llamadas normales, simplemente evaluamos la llamada sin usar el valor de retorno.

@@ -1,0 +1,97 @@
+# Test 2: Cifrado TEA
+#
+# La llave de 128 bits se carga en el vault via @boveda.
+# Los datos a cifrar van como arreglo global.
+# Despues de compilar, usar -m para ver la direccion de 'datos'
+# y cargar ahi el bloque a cifrar con load_file.py.
+#
+# Llave  : [0x01234567, 0x89ABCDEF, 0xFEDCBA98, 0x76543210]
+# Entrada: [0x00112233, 0x44556677]
+# Salida esperada cifrada: depende de la llave
+#
+# Instruccion para probar:
+#   python main.py test_cifrar.yeison -b -m -o cifrar
+#   python load_file.py --input cifrar.bin --output mem/cifrar.mem --address 0x0000
+#   (ejecutar en simulador)
+
+# Datos a cifrar — el simulador puede precargar valores aqui
+# o se pueden cambiar directamente en memoria antes de ejecutar
+var datos : [2] uint = [0x00112233, 0x44556677]'
+
+# Constante TEA
+const DELTA : uint = 0x9E3779B9'
+
+func tea_cifrar() :: void {
+
+    var v0 : uint = datos[0]'
+    var v1 : uint = datos[1]'
+    var suma : uint = 0'
+    var i : int = 0'
+
+    @boveda
+    # Primero configurar contrasena y hacer login (primera vez, no requiere AUTH)
+    setpwd(0, 1234)'   # usuario 0, contrasena 1234
+    login(0, 1234)'    # activar AUTH
+
+    # Cargar llave de 128 bits en el vault (4 palabras de 32 bits)
+    var k0 : uint = 0x01234567'
+    var k1 : uint = 0x89ABCDEF'
+    var k2 : uint = 0xFEDCBA98'
+    var k3 : uint = 0x76543210'
+
+    vkload(k0, 0)'   # K[0] = 0x01234567
+    vkload(k1, 1)'   # K[1] = 0x89ABCDEF
+    vkload(k2, 2)'   # K[2] = 0xFEDCBA98
+    vkload(k3, 3)'   # K[3] = 0x76543210
+    @code
+
+    # 32 rondas de cifrado TEA
+    para (i = 0' i < 32' i = i + 1') {
+        suma = suma + DELTA'
+
+        # v0 += ((v1 << 4) + K[0]) ^ (v1 + suma) ^ ((v1 >> 5) + K[1])
+        # Usando tea_add1 y tea_add2 del vault:
+        #   tea_add1(dest, src, ki) => dest = (src << 4) + K[ki]
+        #   tea_add2(dest, src, ki) => dest = (src >> 5) + K[ki]
+        var t1 : uint = 0'
+        var t2 : uint = 0'
+        var t3 : uint = 0'
+
+        @boveda
+        tea_add1(t1, v1, 0)'   # t1 = (v1 << 4) + K[0]
+        tea_add2(t2, v1, 1)'   # t2 = (v1 >> 5) + K[1]
+        @code
+
+        t3 = v1 + suma'
+        t1 = t1 ^ t3'
+        t1 = t1 ^ t2'
+        v0 = v0 + t1'
+
+        # v1 += ((v0 << 4) + K[2]) ^ (v0 + suma) ^ ((v0 >> 5) + K[3])
+        var t4 : uint = 0'
+        var t5 : uint = 0'
+        var t6 : uint = 0'
+
+        @boveda
+        tea_add1(t4, v0, 2)'   # t4 = (v0 << 4) + K[2]
+        tea_add2(t5, v0, 3)'   # t5 = (v0 >> 5) + K[3]
+        @code
+
+        t6 = v0 + suma'
+        t4 = t4 ^ t6'
+        t4 = t4 ^ t5'
+        v1 = v1 + t4'
+    }
+
+    # Guardar resultado cifrado en datos[]
+    datos[0] = v0'
+    datos[1] = v1'
+
+    @boveda
+    logout()'   # cerrar sesion al terminar
+    @code
+}
+
+func main() :: void {
+    tea_cifrar()'
+}
