@@ -8,6 +8,12 @@ from semantic   import SemanticAnalyzer
 from asmgen     import AsmGen
 from resolver   import Resolver
 from binary_gen import BinaryGen
+from lexer     import Lexer
+from parser    import Parser, ParseError
+from ast_nodes import AstNode, FunctionDeclaration
+from semantic  import SemanticAnalyzer
+from asmgen import AsmGen
+from resolver import Resolver
 
 
 # Impresión del AST
