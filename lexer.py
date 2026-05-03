@@ -77,6 +77,8 @@ class TokenType(Enum):
     ERROR = auto()
     EOF   = auto()
 
+    #DOT = auto()    # . para namespace
+
 
 class Token:
     __slots__ = ('type', 'value', 'line', 'col')
@@ -195,9 +197,26 @@ class Lexer:
     def read_identifier(self) -> Token:
         sl, sc = self.line, self.col
         name = ''
+        
+        # Leer el nombre base (letras, dígitos, guión bajo)
         while self.current().isalnum() or self.current() == '_':
             name += self.advance()
+ 
+        # Soporte para prefijo de módulo: modulo.simbolo
+        # Si sigue '.' y luego letra o '_', es un identificador compuesto.
+        # Ejemplos válidos: archivo.suma, cifrado.tea_cifrar, math.PI
+        # No afecta a floats (3.14) porque el lexer llama a read_number
+        # cuando el primer carácter es un dígito.
+        while self.current() == '.' and (self.peek().isalpha() or self.peek() == '_'):
+            name += self.advance()   # consume '.'
+            while self.current().isalnum() or self.current() == '_':
+                name += self.advance()
+ 
+        # Buscar en palabras reservadas; si no está, es IDENTIFIER
+        # Nota: "modulo.suma" nunca será una palabra reservada, así que
+        # siempre cae en IDENTIFIER, que es el comportamiento correcto.
         return Token(self.KEYWORDS.get(name, TokenType.IDENTIFIER), name, sl, sc)
+
 
     #Subautomata: literales numéricos
     #INICIO'0x'a HEX [0-9a-fA-F]+ a ['u'?] a ACEPTAR
@@ -308,7 +327,7 @@ class Lexer:
             '{': TokenType.LBRACE,     '}': TokenType.RBRACE,
             '[': TokenType.LBRACKET,   ']': TokenType.RBRACKET,
             ':': TokenType.COLON,      ',': TokenType.COMMA,
-            "'": TokenType.TERMINATOR,
+            "'": TokenType.TERMINATOR,  #'.': TokenType.DOT,
         }
         if ch in one:
             self.advance()

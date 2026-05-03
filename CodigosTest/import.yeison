@@ -1,0 +1,5 @@
+importar suma'
+
+var x : int = 0'
+
+x = suma(4, 5)'
