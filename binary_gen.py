@@ -231,9 +231,10 @@ def encode_instruction(line: str) -> int:
         rd   = reg(tokens[1].rstrip(','))
         imm8 = parse_int(tokens[2].rstrip(',')) & 0xFF
         pos  = parse_int(tokens[3].rstrip(',')) & 0x3
+
         imm11 = (pos << 9) | imm8
-        # LLI usa rs1=0 (el campo rs1 no se usa)
-        return encode_i(OPCODES['lli'], rd, 0, imm11)
+
+        return encode_lli(OPCODES['lli'], rd, imm11)
 
     # LOAD (I-Type): load rd, offset(rs1)
     if op == 'load':
@@ -320,6 +321,17 @@ def encode_instruction(line: str) -> int:
         return encode_v(OPCODES['authchk'], 0, 0, 0, AUTHCHK_FUNCT)
 
     raise ValueError(f"Instrucción no reconocida: '{line}'")
+
+
+def encode_lli(op, rd, imm11):
+    # NO signed check, solo 11 bits
+    if not (0 <= imm11 <= 0x7FF):
+        raise ValueError(f"LLI fuera de rango 11 bits: {imm11}")
+    
+    return ((op & 0xF) << 19 |
+            (rd & 0xF) << 15 |
+            (0 << 11) |
+            (imm11 & 0x7FF))
 
 # Clase principal
 

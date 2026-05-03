@@ -62,7 +62,10 @@ class AsmGen:
         self._assign_function_addresses(ast)
  
         # 1. Init SP
-        self._emit("addi r2, r0, 57344") # SP inicial en 0xE000 para dejar espacio para el archivo
+        self._emit("lli r2, 0, 0")
+        self._emit("lli r2, 0, 1")
+        self._emit("lli r2, 0xE0, 2")
+        self._emit("lli r2, 0, 3")
  
         # 2. Globals: recorrer solo declaraciones de nivel superior
         self._emit_blank()
