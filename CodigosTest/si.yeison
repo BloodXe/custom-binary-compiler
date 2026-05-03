@@ -7,3 +7,9 @@ func test() :: void {
         x = 0'
     }
 }
+
+func main()::void{
+
+    test()'
+    
+}

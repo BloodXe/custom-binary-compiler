@@ -1,53 +1,136 @@
-# Fase 5: Cálculo de Saltos y Resolución de Referencias
+# resolver.py — Fase 5: Cálculo de Saltos y Resolución de Referencias
+#
+# Responsabilidad:
+#   Toma el ensamblador textual generado por AsmGen (con etiquetas como nombres)
+#   y produce ensamblador con los nombres de etiqueta reemplazados por offsets
+#   relativos al PC de la instrucción que hace el salto.
+#
+# Offset relativo en TEA-ISA:
+#   PC_destino = PC_instruccion + offset * 4
+#   → offset = (addr_label - addr_instruccion) / 4
+#
+# El offset se mide en palabras (no bytes), ya que la ISA multiplica el campo
+# de offset por el tamaño de instrucción internamente.
+#
+# Ejemplo:
+#   0x00  jal r0, fin      → fin está en 0x10
+#         offset = (0x10 - 0x00) / 4 = 4
+#   0x10  fin:             ← aquí llega el salto
+
+import re
+
+INSTRUCTION_SIZE = 4   # bytes por instrucción (word-aligned)
+
 
 class Resolver:
-    def __init__(self, asm):
-        self.asm = asm.splitlines() # El string se separa a lista de las lineas
-        self.labels = {}
-        self.instruction_size = 4 # Tamaño de las instrucciones
+    """
+    Dos pasadas sobre el código ensamblador textual:
+      Pasada 1 — labels_direction : construye {nombre_label → dirección_byte}
+      Pasada 2 — labels_rewrite   : reemplaza nombres por offsets relativos
+    """
 
+    def __init__(self, asm: str):
+        # Separar en líneas y limpiar
+        self.asm    = asm.splitlines()
+        self.labels = {}   # {nombre: dirección_byte}
+
+    # Pasada 1: construir tabla de etiquetas
     def labels_direction(self):
-        # Recorre el ASM y guarda la dirección de cada etiqueta
+        """
+        Recorre el ASM y registra la dirección de byte de cada etiqueta.
+
+        Reglas de clasificación de líneas:
+          - Vacía o solo comentario (#...)  → ignorar (no avanza PC)
+          - Termina con ':'                 → etiqueta, registrar dirección
+          - Cualquier otra cosa             → instrucción, avanzar PC en 4
+
+        Las líneas de comentario puro (que empiezan con '#') NO son
+        instrucciones, pero el AsmGen las emite sin ':' final.
+        Las detectamos buscando si la línea (sin el '#') corresponde
+        a una instrucción real: si la primer palabra no es una mnemónica
+        conocida, la tratamos como comentario/label-comentario.
+        """
         address = 0
+        for line in self.asm:
+            stripped = line.strip()
 
-        # Se cicla para cada linea del codigo de asembly
-        for i in self.asm:
-            i = i.strip()   # .strip elimina espacios antes o despues del string
-
-            if i == "":     # Si está vacío solo sigue
+            if not stripped: # línea vacía
                 continue
 
-            if i.endswith(":"):  # Si termina con : significa que es un label
-                label = i[:-1]    # Quita el : del string y ese es el nombre del label
-                self.labels[label] = address     # Guarda la dirección del label, con su nombre
-            else:
-                address += self.instruction_size     # Si no es label solo sigue, sumando 4 cada vez que lee una linea
+            if stripped.startswith('#'): # comentario puro
+                continue
 
-    # Segunda pasada por las instrucciones  
-    def labels_rewrite(self):
+            if stripped.endswith(':'): # etiqueta
+                # El nombre puede tener espacios antes del ':'
+                # y puede haber un comentario inline: "foo:  # comentario"
+                label_part = stripped.rstrip(':').split('#')[0].strip()
+                if label_part: # etiqueta con nombre real
+                    self.labels[label_part] = address
+                continue
+
+            # Instrucción real: avanzar PC
+            address += INSTRUCTION_SIZE
+
+    # Pasada 2: reemplazar etiquetas por offsets
+    def labels_rewrite(self) -> list:
+        """
+        Para cada instrucción, busca si contiene algún nombre de etiqueta
+        y lo reemplaza por el offset relativo (en palabras) al PC actual.
+
+        Matching exacto: usamos \\b (word boundary) para que 'end' no
+        matchee dentro de 'while_end'. Esto evita el bug del amigo donde
+        un label corto pisaba al largo.
+        """
         new_code = []
         actual_pc = 0
 
-        for i in self.asm:
-            i = i.strip()
+        for line in self.asm:
+            stripped = line.strip()
 
-            if i == "":
+            # Ignorar vacías, comentarios puros y etiquetas
+            if not stripped:
+                continue
+            if stripped.startswith('#'):
+                continue
+            if stripped.endswith(':'):
                 continue
 
-            if i.endswith(":"):
-                continue
+            # Separar instrucción de comentario inline (si hay)
+            instr_part, _, comment_part = stripped.partition('#')
+            instr_part = instr_part.strip()
 
-            for label, address in self.labels.items():  # Se cicla por label y su dirección
-                if label in i:        # Si se reconoce el label en i (actual linea)
-                    offset = (address - actual_pc) // self.instruction_size  # Calcula el offset dividiendo la diferencia de direcciones entre el tamaño de la instrucción
-                    i = i.replace(label, str(offset))    # Intercambia el i, y el label por su offset
-            
-            new_code.append(i)     # mete a la lista nueva la linea leída ya sea con el cambio o no
-            actual_pc += self.instruction_size   # Suma el tamaño de la instrucción para la siguiente iteración
-            
+            # Buscar y reemplazar etiquetas en la parte de instrucción
+            # Ordenar por longitud descendente para evitar que un label
+            # corto reemplace parte de uno largo (e.g. 'end' vs 'while_end')
+            for label in sorted(self.labels, key=len, reverse=True):
+                # Matching de palabra completa con regex
+                pattern = r'\b' + re.escape(label) + r'\b'
+                if re.search(pattern, instr_part):
+                    label_addr  = self.labels[label]
+                    # Offset en palabras relativo al PC de ESTA instrucción
+                    offset = (label_addr - actual_pc) // INSTRUCTION_SIZE
+                    instr_part = re.sub(pattern, str(offset), instr_part)
+
+            # Reconstruir línea con comentario si lo había
+            if comment_part:
+                resolved_line = f"{instr_part}  #{comment_part}"
+            else:
+                resolved_line = instr_part
+
+            new_code.append(resolved_line)
+            actual_pc += INSTRUCTION_SIZE
+
         return new_code
-    
-    def resolve(self):
-        # Ejecuta las dos pasadas 
+
+    # Punto de entrada
+
+    def resolve(self) -> str:
+        """Ejecuta las dos pasadas y retorna el ASM con referencias resueltas."""
         self.labels_direction()
-        return "\n".join(self.labels_rewrite())
+        resolved_lines = self.labels_rewrite()
+        return "\n".join(resolved_lines)
+
+    def get_label_table(self) -> dict:
+        """Retorna la tabla de etiquetas para debugging."""
+        return dict(self.labels)
+    
