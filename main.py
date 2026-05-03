@@ -5,6 +5,7 @@ from parser    import Parser, ParseError
 from ast_nodes import AstNode, FunctionDeclaration
 from semantic  import SemanticAnalyzer
 from asmgen import AsmGen
+from resolver import Resolver
 
 
 def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
@@ -33,8 +34,10 @@ def main():
     ap.add_argument('-m', '--memoria',    action='store_true', help='Mostrar mapa de memoria')
     ap.add_argument('-e', '--etiquetas',  action='store_true', help='Mostrar etiquetas de salto')
     ap.add_argument('-S', '--asm',        action='store_true', help='Generar código ASM')
+    ap.add_argument('-n', '--resolver',   action='store_true', help='Mostrar el código ASM con los saltos resueltos')
     ap.add_argument('-o', '--output', help='Archivo de salida')
     ap.add_argument('-a', '--all',        action='store_true', help='Mostrar todo')
+    
     args = ap.parse_args()
 
     # -a activa todos los reportes
@@ -45,6 +48,7 @@ def main():
         args.memoria = True
         args.etiquetas = True
         args.asm = True
+        args.resolver = True
 
     #se lee el archivo
     try:
@@ -111,6 +115,20 @@ def main():
         if args.output:
             with open(args.output, 'w') as f:
                 f.write(asm_code)
+            print(f"\nASM guardado en: {args.output}")
+    
+    # Code Generation
+    if args.resolver:
+        new = Resolver(asm_code)
+        resolved_code = new.resolve()
+
+        print("\n=== NUEVO ASM GENERADO ===\n")
+        print(resolved_code)
+
+        # Guardar archivo si se pidió
+        if args.output:
+            with open(args.output, 'w') as f:
+                f.write(resolved_code)
             print(f"\nASM guardado en: {args.output}")
 
     return 0
