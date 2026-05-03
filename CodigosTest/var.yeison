@@ -6,3 +6,8 @@ func test()::void{
     var y : int = 2'
     var z : int = 3'
 }
+
+func main()::void{
+
+    test()'
+}

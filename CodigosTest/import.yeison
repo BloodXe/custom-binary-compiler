@@ -2,4 +2,4 @@ importar suma'
 
 var x : int = 0'
 
-x = suma(4, 5)'
+x = suma.suma(4, 5)'
