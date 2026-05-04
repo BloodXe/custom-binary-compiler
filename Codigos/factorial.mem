@@ -1,45 +1,49 @@
 110000 // lli r2, 0, 0
 1102E0 // lli r2, 0xE0, 1
-38801E // jal r1, 30
+388022 // jal r1, 34
 480000 // halt
 642000 // add r8, r4, r0
 0C8001 // addi r9, r0, 1
-344C05 // bgt r8, r9, 5
+34C405 // bgt r8, r9, 5
 0C8001 // addi r9, r0, 1
 624800 // add r4, r9, r0
 408000 // jr r1
-380015 // jal r0, 21
+380019 // jal r0, 25
 64A000 // add r9, r4, r0
 0917FC // addi r2, r2, -4
-209000 // store r1, 0(r2)
-642000 // add r8, r4, r0
-0D0001 // addi r10, r0, 1
-65C510 // sub  r11, r8, r10
-625800 // add r4, r11, r0
-38FFF2 // jal r1, -14
-189000 // load r1, 0(r2)
-091004 // addi r2, r2, 4
-65A000 // add r11, r4, r0
-0D0000 // addi r10, r0, 0
-645800 // add  r8, r11, r0
-0D8001 // addi r11, r0, 1
-2C0004 // beq  r8, r0, 4
-655480 // add  r10, r10, r9
-644590 // sub  r8, r8, r11
-387FFD // jal  r0, -3
-625000 // add r4, r10, r0
-408000 // jr r1
-408000 // jr r1
-0917FC // addi r2, r2, -4
-0D0005 // addi r10, r0, 5
-251000 // store r10, 0(r2)
+249000 // store r9, 0(r2)
 0917FC // addi r2, r2, -4
 209000 // store r1, 0(r2)
-1D1004 // load r10, 4(r2)
+64A000 // add r9, r4, r0
+0C0001 // addi r8, r0, 1
+654C10 // sub  r10, r9, r8
 625000 // add r4, r10, r0
-38FFDD // jal r1, -35
+38FFF0 // jal r1, -16
 189000 // load r1, 0(r2)
 091004 // addi r2, r2, 4
 652000 // add r10, r4, r0
+1C1000 // load r8, 0(r2)
+091004 // addi r2, r2, 4
+0C8000 // addi r9, r0, 0
+65D000 // add  r11, r10, r0
+0D0001 // addi r10, r0, 1
+285804 // beq  r11, r0, 4
+64CC00 // add  r9, r9, r8
+65DD10 // sub  r11, r11, r10
+387FFD // jal  r0, -3
+624800 // add r4, r9, r0
+408000 // jr r1
+408000 // jr r1
+0917FC // addi r2, r2, -4
+0C8005 // addi r9, r0, 5
+249000 // store r9, 0(r2)
+0917FC // addi r2, r2, -4
+209000 // store r1, 0(r2)
+1C9004 // load r9, 4(r2)
+624800 // add r4, r9, r0
+38FFD9 // jal r1, -39
+189000 // load r1, 0(r2)
+091004 // addi r2, r2, 4
+64A000 // add r9, r4, r0
 091004 // addi r2, r2, 4
 408000 // jr r1

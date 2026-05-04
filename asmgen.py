@@ -235,8 +235,8 @@ class AsmGen:
         # Normalizar a 32 bits sin signo para el cálculo de bytes
         value32 = value & 0xFFFFFFFF
 
-        # Si el valor cabe en 11 bits sin signo (0..2047), lo cargamos directamente con addi
-        if 0 <= value < 2048:
+        # Si el valor cabe en 11 bits sin signo (0..1023), lo cargamos directamente con addi
+        if 0 <= value < 1023:
             self._emit(f"addi {r}, r0, {value}")
             return r
 
@@ -377,31 +377,28 @@ class AsmGen:
     # IndexAccess: para arr[i], obtenemos la dirección base del arreglo y calculamos la dirección del 
     # elemento con desplazamiento (index * 4), luego cargamos el valor
     def visit_IndexAccess(self, node) -> str:
-        """Carga arr[i] en un registro temporal."""
-        target   = node.target
-        idx_node = node.indices[0]
+        r_base  = self._resolve_array_base(node.target)
+        r_index = self.visit(node.indices[0])
 
-        # Obtener dirección base del arreglo (puede ser global o local) y el valor del índice
-        r_base   = self._resolve_array_base(target)
-        r_index  = self.visit(idx_node)
-
-        # Offset = index * 4  (sll 2)
-        r_shift  = self._alloc_reg()
-        r_offset = self._alloc_reg()
-        r_addr   = self._alloc_reg()
-        r_value  = self._alloc_reg()
-
+        # Calcular offset = index * 4
+        r_shift = self._alloc_reg()
         self._emit(f"addi {r_shift}, r0, 2")
+        
+        r_offset = self._alloc_reg()
         self._emit(f"sll {r_offset}, {r_index}, {r_shift}")
-        self._emit(f"add {r_addr}, {r_base}, {r_offset}")
-        self._emit(f"load {r_value}, 0({r_addr})")
+        self._free_reg(r_shift)      
+        self._free_if_temp(r_index)  
 
-        self._free_if_temp(r_index)
-        self._free_reg(r_shift)
-        self._free_reg(r_offset)
-        self._free_reg(r_addr)
-        # r_base puede ser un temp si fue calculado
-        self._free_if_temp(r_base)
+        # addr = base + offset
+        r_addr = self._alloc_reg()
+        self._emit(f"add {r_addr}, {r_base}, {r_offset}")
+        self._free_reg(r_offset)     
+        self._free_if_temp(r_base)  
+
+        # Cargar valor
+        r_value = self._alloc_reg()
+        self._emit(f"load {r_value}, 0({r_addr})")
+        self._free_reg(r_addr)       
 
         return r_value
 
@@ -451,19 +448,22 @@ class AsmGen:
         if isinstance(node, IndexAccess):
             # matrix[i][j]: Primero obtenemos la dirección de la fila matrix[i]
             r_row_base = self._resolve_array_base(node.target) # Registro con la dirección base de matrix[i]
-            r_index    = self.visit(node.indices[0]) # Registro con el valor de j (índice de la columna)
-            r_shift    = self._alloc_reg() # Registro para el desplazamiento (j * 4)
-            r_offset   = self._alloc_reg() # Registro para la dirección del elemento (matrix[i] + j*4)
-            r_addr     = self._alloc_reg() # Registro para la dirección final del elemento (matrix[i][j])
-
+            r_index = self.visit(node.indices[0]) # Registro con el valor de j (índice de la columna)
+            r_shift = self._alloc_reg() # Registro para el desplazamiento (j * 4)
+            r_offset = self._alloc_reg() # Registro para la dirección del elemento (matrix[i] + j*4)
+            
             self._emit(f"addi {r_shift}, r0, 2")
             self._emit(f"sll {r_offset}, {r_index}, {r_shift}")
+
+            self._free_reg(r_shift) # Liberamos r_shift para tener uno disponible para r_addr
+            r_addr = self._alloc_reg() # Registro para la dirección final del elemento (matrix[i][j])
+
             self._emit(f"add {r_addr}, {r_row_base}, {r_offset}")
 
             self._free_if_temp(r_index)
-            self._free_reg(r_shift)
             self._free_reg(r_offset)
             self._free_if_temp(r_row_base)
+
             return r_addr
 
         # Si el nodo no es ni Identifier ni IndexAccess, no sabemos cómo resolverlo; retornamos 0
@@ -472,42 +472,80 @@ class AsmGen:
         return r
 
     # Expresiones binarias y unarias: generamos código para evaluar operandos y luego aplicamos la operación usando las instrucciones de la ISA
+    
+
+    def _contains_call(self, node) -> bool:
+        """Retorna True si el nodo o alguno de sus descendientes es una FunctionCall."""
+        from ast_nodes import FunctionCall
+        if isinstance(node, FunctionCall):
+            return True
+        for child in getattr(node, 'children', []):
+            if child and self._contains_call(child):
+                return True
+        return False
+
 
     # Para BinaryOp, manejamos operadores aritméticos, lógicos y de comparación. La multiplicación se emite como un 
     # loop de suma repetida (no hay instrucción MUL en el ISA).
     def visit_BinaryOp(self, node) -> str:
-        # Multiplicación: requiere loop (no hay instrucción MUL en la ISA)
+        # Multiplicación tiene su propio método que ya maneja el caso de FunctionCall
         if node.op == '*':
             return self._emit_mul(node)
-
-        r1 = self.visit(node.left) # Evaluar operando izquierdo
-        r2 = self.visit(node.right) # Evaluar operando derecho
-        r3 = self._alloc_reg() # Registro para el resultado de la operación
-
-        # Operadores aritméticos y lógicos directos: mapeo directo a instrucciones de la ISA
+ 
+        # Evaluar lado izquierdo
+        r1 = self.visit(node.left)
+ 
+        # Si el lado derecho contiene una llamada a función, proteger r1 en el stack.
+        # Las llamadas destruyen los registros temporales (r8-r11) durante su ejecución.
+        right_has_call = self._contains_call(node.right)
+ 
+        if right_has_call:
+            # PUSH r1 al stack
+            self._emit("addi r2, r2, -4")
+            self._emit(f"store {r1}, 0(r2)")
+            # Ajustar offsets de variables locales
+            for k in self.current_locals:
+                self.current_locals[k] += 4
+            self.local_offset += 4
+            self._free_if_temp(r1)
+ 
+            # Evaluar lado derecho (puede llamar funciones)
+            r2_val = self.visit(node.right)
+ 
+            # POP r1 del stack
+            r1 = self._alloc_reg()
+            self._emit(f"load {r1}, 0(r2)")
+            self._emit("addi r2, r2, 4")
+            # Restaurar offsets de variables locales
+            for k in self.current_locals:
+                self.current_locals[k] -= 4
+            self.local_offset -= 4
+        else:
+            r2_val = self.visit(node.right)
+ 
+        r3 = self._alloc_reg()
+ 
         ISA_OPS = {
-            '+':  f"add  {r3}, {r1}, {r2}",
-            '-':  f"sub  {r3}, {r1}, {r2}",
-            '&':  f"and  {r3}, {r1}, {r2}",
-            '|':  f"or   {r3}, {r1}, {r2}",
-            '^':  f"xor  {r3}, {r1}, {r2}",
-            '<<': f"sll  {r3}, {r1}, {r2}",
-            '>>': f"srl  {r3}, {r1}, {r2}",
+            '+':  f"add  {r3}, {r1}, {r2_val}",
+            '-':  f"sub  {r3}, {r1}, {r2_val}",
+            '&':  f"and  {r3}, {r1}, {r2_val}",
+            '|':  f"or   {r3}, {r1}, {r2_val}",
+            '^':  f"xor  {r3}, {r1}, {r2_val}",
+            '<<': f"sll  {r3}, {r1}, {r2_val}",
+            '>>': f"srl  {r3}, {r1}, {r2_val}",
         }
-
-        # Si el operador tiene mapeo directo en la ISA, lo emitimos; si es de comparación o lógico sin mnemónica directa, lo sintetizamos con branches
+ 
         if node.op in ISA_OPS:
             self._emit(ISA_OPS[node.op])
         elif node.op in ('==', '!=', '<', '>', '<=', '>=', 'and', 'or'):
-            # Operadores de comparación: el resultado es 1 (true) o 0 (false)
-            # Se sintetizan con branch + addi
-            self._emit_comparison(r3, r1, r2, node.op)
+            self._emit_comparison(r3, r1, r2_val, node.op)
         else:
             self._emit(f"add {r3}, {r1}, r0   # operador '{node.op}' no soportado")
-
+ 
         self._free_if_temp(r1)
-        self._free_if_temp(r2)
+        self._free_if_temp(r2_val)
         return r3
+
 
     # Para UnaryOp, manejamos operadores unarios como negación, NOT lógico y NOT a nivel de bits. 
     # Se mapean a instrucciones de la ISA o se sintetizan con branches para el caso de NOT lógico.
@@ -552,41 +590,68 @@ class AsmGen:
         self._emit_label(lbl_end)
 
     # Funcion de multiplicación: se emite como un loop de suma repetida (res = 0; while b != 0: res += a; b--)
-    def _emit_mul(self, node: BinaryOp) -> str:
-        """
-        Multiplicación por suma repetida.
-        res = 0; while b != 0: res += a; b--
-        """
-        r_a   = self.visit(node.left)  # Evaluar operando izquierdo (a)
-        r_b   = self.visit(node.right) # Evaluar operando derecho (b)
-        r_res = self._alloc_reg()  # Registro para el resultado de la multiplicación
-        r_cnt = self._alloc_reg()  # copia de b (para no destruir el original)
-
-        lbl_loop = f"mul_loop_{self._mul_count}" # Etiqueta para el inicio del loop de multiplicación
-        lbl_end  = f"mul_end_{self._mul_count}" # Etiqueta para el fin del loop de multiplicación
-        self._mul_count += 1 # Incrementar el contador de multiplicaciones para evitar colisiones de etiquetas
-
-        self._emit(f"addi {r_res}, r0, 0")
-        self._emit(f"add  {r_cnt}, {r_b}, r0")
-
-        self._free_if_temp(r_b) # Liberar el registro temporal de b, ya que tenemos una copia en r_cnt
-
-        
-
-        r_one = self._alloc_reg()                 # ahora hay espacio
-        self._emit(f"addi {r_one}, r0, 1")
-
+    def _emit_mul(self, node) -> str:
+        from ast_nodes import FunctionCall as FC
+ 
+        r_a = self.visit(node.left)
+ 
+        # Si el operando derecho es una llamada a función,
+        # los temporales pueden ser destruidos durante la llamada.
+        # Guardamos r_a en el stack antes de evaluar el lado derecho.
+        right_is_call = isinstance(node.right, FC)
+ 
+        if right_is_call:
+            # PUSH r_a al stack
+            self._emit("addi r2, r2, -4")
+            self._emit(f"store {r_a}, 0(r2)")
+            # Ajustar offsets locales por el PUSH
+            for k in self.current_locals:
+                self.current_locals[k] += 4
+            self.local_offset += 4
+            self._free_if_temp(r_a)
+ 
+            # Evaluar el lado derecho (la llamada)
+            r_b = self.visit(node.right)
+ 
+            # POP r_a del stack
+            r_a = self._alloc_reg()
+            self._emit(f"load {r_a}, 0(r2)")
+            self._emit("addi r2, r2, 4")
+            # Restaurar offsets locales
+            for k in self.current_locals:
+                self.current_locals[k] -= 4
+            self.local_offset -= 4
+        else:
+            r_b = self.visit(node.right)
+ 
+        # Loop de multiplicación por suma repetida:
+        # res = 0; cnt = b; while cnt != 0: res += a; cnt--
+        r_res = self._alloc_reg()
+        r_cnt = self._alloc_reg()
+        self._free_if_temp(r_b)   # liberar r_b antes de alocar r_one
+ 
+        lbl_loop = f"mul_loop_{self._mul_count}"
+        lbl_end  = f"mul_end_{self._mul_count}"
+        self._mul_count += 1
+ 
+        self._emit(f"addi {r_res}, r0, 0")       # res = 0
+        self._emit(f"add  {r_cnt}, {r_b}, r0")   # cnt = b
+ 
+        r_one = self._alloc_reg()
+        self._emit(f"addi {r_one}, r0, 1")        # constante 1
+ 
         self._emit_label(lbl_loop)
-        self._emit(f"beq  {r_cnt}, r0, {lbl_end}")
-        self._emit(f"add  {r_res}, {r_res}, {r_a}")
-        self._emit(f"sub  {r_cnt}, {r_cnt}, {r_one}")
+        self._emit(f"beq  {r_cnt}, r0, {lbl_end}")           # si cnt==0: fin
+        self._emit(f"add  {r_res}, {r_res}, {r_a}")          # res += a
+        self._emit(f"sub  {r_cnt}, {r_cnt}, {r_one}")        # cnt--
         self._emit(f"jal  r0, {lbl_loop}")
         self._emit_label(lbl_end)
-
+ 
         self._free_if_temp(r_a)
         self._free_reg(r_one)
         self._free_reg(r_cnt)
         return r_res
+
 
 
     # Para UnaryOp, manejamos operadores unarios como negación, NOT lógico y NOT a nivel de bits.
@@ -722,9 +787,13 @@ class AsmGen:
             self._free_if_temp(r_pwd)
 
         elif name == 'authorize':
-            # authorize(token) = authorize rs1_token
-            r_tok = self.visit(args[0]) # El argumento (token = token de autorización) se mapea a rs1
-            self._emit(f"authorize {r_tok}")
+            # authorize(uid, token)
+            r_uid = self.visit(args[0])
+            r_tok = self.visit(args[1])
+
+            self._emit(f"authorize {r_uid}, {r_tok}")
+
+            self._free_if_temp(r_uid)
             self._free_if_temp(r_tok)
 
         elif name == 'vkload':
@@ -937,21 +1006,25 @@ class AsmGen:
         # Si el destino es un acceso a índice, calculamos la dirección del elemento y almacenamos allí
         elif isinstance(node.target, IndexAccess):
             # arr[i] = val  o  matrix[i][j] = val
-            r_base   = self._resolve_array_base(node.target.target)  # Registro con la dirección base del arreglo (para arr[i]) o de la fila (para matrix[i][j])
-            r_index  = self.visit(node.target.indices[0]) # Registro con el valor del índice (i para arr[i], j para matrix[i][j])
+            r_index = self.visit(node.target.indices[0]) # Registro con el valor del índice (i para arr[i], j para matrix[i][j])
 
-            r_shift  = self._alloc_reg() # Registro para el desplazamiento (índice * 4, ya que cada elemento ocupa 4 bytes)
+            r_shift = self._alloc_reg() # Registro para el desplazamiento (índice * 4, ya que cada elemento ocupa 4 bytes)
             r_offset = self._alloc_reg() # Registro para la dirección del elemento (base + desplazamiento)
-            r_addr   = self._alloc_reg() # Registro para la dirección final del elemento (donde se almacenará el valor)
+            
 
             self._emit(f"addi {r_shift}, r0, 2") 
             self._emit(f"sll  {r_offset}, {r_index}, {r_shift}")
+
+            self._free_reg(r_shift)
+            self._free_if_temp(r_index)
+
+            r_base = self._resolve_array_base(node.target.target)  # Registro con la dirección base del arreglo (para arr[i]) o de la fila (para matrix[i][j])
+            r_addr = self._alloc_reg() # Registro para la dirección final del elemento (donde se almacenará el valor)
+
             self._emit(f"add  {r_addr}, {r_base}, {r_offset}")
             self._emit(f"store {r_val}, 0({r_addr})")
 
             self._free_if_temp(r_val)
-            self._free_if_temp(r_index)
-            self._free_reg(r_shift)
             self._free_reg(r_offset)
             self._free_reg(r_addr)
             self._free_if_temp(r_base)

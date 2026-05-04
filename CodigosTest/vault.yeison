@@ -1,0 +1,28 @@
+func vault()::void{
+
+    var token : uint = 0xDDAABBCF'
+
+    @boveda
+    authorize(0, token)'
+    setpwd(0, 1234)'   # usuario 0, contrasena 1234
+    login(0, 1234)'    # activar AUTH
+
+    # Cargar llave de 128 bits en el vault (4 palabras de 32 bits)
+    var k0 : uint = 0x01234567'
+    var k1 : uint = 0x89ABCDEF'
+    var k2 : uint = 0xFEDCBA98'
+    var k3 : uint = 0x76543210'
+
+    vkload(k0, 0)'   # K[0] = 0x01234567
+    vkload(k1, 1)'   # K[1] = 0x89ABCDEF
+    vkload(k2, 2)'   # K[2] = 0xFEDCBA98
+    vkload(k3, 3)'   # K[3] = 0x76543210
+    @code
+
+}
+
+func main()::void {
+
+    vault()'
+
+}

@@ -14,12 +14,13 @@
 #   python load_file.py --input cifrar.bin --output mem/cifrar.mem --address 0x0000
 #   (ejecutar en simulador)
 
-# Datos a cifrar — el simulador puede precargar valores aqui
-# o se pueden cambiar directamente en memoria antes de ejecutar
-var datos : [2] uint = [0x00112233, 0x44556677]'
-
 # Constante TEA
 const DELTA : uint = 0x9E3779B9'
+
+# Datos a cifrar — el simulador puede precargar valores aqui
+# o se pueden cambiar directamente en memoria antes de ejecutar
+
+var datos : [2] uint = [0x00112233, 0x44556677]'
 
 func tea_cifrar() :: void {
 
@@ -30,6 +31,7 @@ func tea_cifrar() :: void {
 
     @boveda
     # Primero configurar contrasena y hacer login (primera vez, no requiere AUTH)
+    authorize(0, 32'hDDAABBCF)'
     setpwd(0, 1234)'   # usuario 0, contrasena 1234
     login(0, 1234)'    # activar AUTH
 

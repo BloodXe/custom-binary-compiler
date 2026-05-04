@@ -254,7 +254,7 @@ def encode_instruction(line: str) -> int:
         rs2    = reg(tokens[2].rstrip(','))
         offset = parse_int(tokens[3])
         cond   = 1 if op == 'bne' else 0
-        return encode_b(OPCODES['beq'], rs1, rs2, offset, cond)
+        return encode_b(OPCODES['beq'], rs2, rs1, offset, cond)
 
     # BGE / BGT (B-Type, opcode 0110)
     if op in ('bge', 'bgt'):
@@ -262,7 +262,7 @@ def encode_instruction(line: str) -> int:
         rs2    = reg(tokens[2].rstrip(','))
         offset = parse_int(tokens[3])
         cond   = 1 if op == 'bgt' else 0
-        return encode_b(OPCODES['bge'], rs1, rs2, offset, cond)
+        return encode_b(OPCODES['bge'], rs2, rs1, offset, cond)
 
     # JAL (J-Type): jal rd, offset
     if op == 'jal':
@@ -302,8 +302,9 @@ def encode_instruction(line: str) -> int:
 
     # authorize rs1_token
     if op == 'authorize':
-        rs1 = reg(tokens[1].rstrip(','))
-        return encode_v(OPCODES['authorize'], 0, rs1, 0, VAULT_FUNCT['authorize'])
+        rs2 = reg(tokens[1].rstrip(','))  # uid
+        rs1 = reg(tokens[2].rstrip(','))  # token
+        return encode_v(OPCODES['authorize'], rs2, rs1, 0, VAULT_FUNCT['authorize'])
 
     # vkload rs1_data, ki
     if op == 'vkload':
@@ -416,6 +417,7 @@ class BinaryGen:
         lines = []
         for i, w in enumerate(self.words):
             asm_line = self.lines[i] if i < len(self.lines) else ""
+            
             lines.append(f"{w:06X} // {asm_line}")
         return "\n".join(lines)
 

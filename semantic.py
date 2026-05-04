@@ -262,10 +262,10 @@ class SemanticAnalyzer:
     def visit_SectionBlock(self, n):
         #RS-10 guardamos la seccion activa para saber si se puede llamar boveda
         previous = self.section
-        self.section = n.annotation
+        self.section = n.annotation  # actualiza a @boveda o @code
         for stmt in n.body:
             self.visit(stmt)
-        self.section = previous
+        self.section = previous      # restaura al salir
 
     def visit_FunctionDeclaration(self, n):
         params = [(pname, type_str(ptype)) for pname, ptype in n.params]
@@ -290,6 +290,7 @@ class SemanticAnalyzer:
                 self.error(f"RS-02: el parametro '{pname}' esta duplicado en '{n.name}'", n)
 
         for stmt in n.body:
+            print(f"DEBUG sem: {type(stmt).__name__}") 
             self.visit(stmt)
 
         self.symbol_table.close_scope()
