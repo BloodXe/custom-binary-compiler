@@ -20,15 +20,17 @@ const DELTA : uint = 0x9E3779B9'
 # Datos a cifrar — el simulador puede precargar valores aqui
 # o se pueden cambiar directamente en memoria antes de ejecutar
 
-var final : uint = 10' # Variable que indica el final del archivo en memoria
 
-#Posicion de memoria inicial del archivo a desencriptar
-var addr : int = 0'
 
-func tea_cifrar(addr:int) :: void {
+func tea_cifrar(addr:uint) :: void {
 
+    # Calculamos la posicion siguiente en memoria
+    var addr2 : uint = addr + 4'
+
+    # Traemos los valores de memoria
     var v0 : uint = mem[addr]'
-    var v1 : uint = mem[addr + 4]'
+    var v1 : uint = mem[addr2]'
+
     var suma : uint = 0'
     var i : int = 0'
     var token : uint = 0xDDAABBCF' 
@@ -99,6 +101,11 @@ func tea_cifrar(addr:int) :: void {
 }
 
 func main() :: void {
+
+    var final : uint = 10' # Variable que indica el final del archivo en memoria
+
+    #Posicion de memoria inicial del archivo a desencriptar
+    var addr : uint = 0'
 
     mientras (addr < final){
 

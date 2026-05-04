@@ -6,16 +6,15 @@
 #   [0x00112233, 0x44556677]
 
 const DELTA : uint = 0x9E3779B9'
-
 # Misma llave que en test_cifrar.yeison
 var datos : [2] uint = [0x00000000, 0x00000000]'  # cargar bloque cifrado aqui
 
 
+func tea_descifrar(addr:uint) :: void {
 
-func tea_descifrar() :: void {
-
-    var v0 : uint = datos[0]'
-    var v1 : uint = datos[1]'
+    var addr2 : uint = addr + 4'
+    var v0 : uint = mem[addr]'
+    var v1 : uint = mem[addr2]'
 
     # suma inicial = DELTA * 32
     # Como no tenemos MUL directo eficiente para constantes grandes,
@@ -81,8 +80,8 @@ func tea_descifrar() :: void {
         suma = suma - DELTA'
     }
 
-    datos[0] = v0'
-    datos[1] = v1'
+    mem[addr] = v0'
+    mem[addr2] = v1'
 
     @boveda
     logout()'
@@ -90,5 +89,14 @@ func tea_descifrar() :: void {
 }
 
 func main() :: void {
-    tea_descifrar()'
+
+    var final : uint = 16'   # múltiplo de 8
+    var addr : int = 0'
+
+    mientras (addr < final){
+
+        tea_descifrar(addr)'
+
+        addr = addr + 8'
+    }
 }
