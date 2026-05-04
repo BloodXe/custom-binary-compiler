@@ -28,10 +28,11 @@ func tea_cifrar() :: void {
     var v1 : uint = datos[1]'
     var suma : uint = 0'
     var i : int = 0'
+    var token : uint = 0xDDAABBCF' 
 
     @boveda
     # Primero configurar contrasena y hacer login (primera vez, no requiere AUTH)
-    authorize(0, 32'hDDAABBCF)'
+    authorize(0, token)'
     setpwd(0, 1234)'   # usuario 0, contrasena 1234
     login(0, 1234)'    # activar AUTH
 

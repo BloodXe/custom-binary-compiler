@@ -1,0 +1,94 @@
+# Test 3: Descifrado TEA
+#
+# Inverso exacto del cifrado.
+# Los datos[] deben contener el bloque YA CIFRADO antes de ejecutar.
+# Despues de ejecutar, datos[] debe recuperar los valores originales:
+#   [0x00112233, 0x44556677]
+
+const DELTA : uint = 0x9E3779B9'
+
+# Misma llave que en test_cifrar.yeison
+var datos : [2] uint = [0x00000000, 0x00000000]'  # cargar bloque cifrado aqui
+
+
+
+func tea_descifrar() :: void {
+
+    var v0 : uint = datos[0]'
+    var v1 : uint = datos[1]'
+
+    # suma inicial = DELTA * 32
+    # Como no tenemos MUL directo eficiente para constantes grandes,
+    # lo calculamos sumando DELTA 32 veces
+    var suma : uint = 0'
+    var j : int = 0'
+    para (j = 0' j < 32' j = j + 1') {
+        suma = suma + DELTA'
+    }
+
+    var i : int = 0'
+    var token : uint = 0xDDAABBCF' 
+
+    @boveda
+    authorize(0, token)'
+    setpwd(0, 1234)'
+    login(0, 1234)'
+
+    var k0 : uint = 0x01234567'
+    var k1 : uint = 0x89ABCDEF'
+    var k2 : uint = 0xFEDCBA98'
+    var k3 : uint = 0x76543210'
+
+    vkload(k0, 0)'
+    vkload(k1, 1)'
+    vkload(k2, 2)'
+    vkload(k3, 3)'
+    @code
+
+    # 32 rondas de descifrado (orden inverso al cifrado)
+    para (i = 0' i < 32' i = i + 1') {
+
+        # v1 -= ((v0 << 4) + K[2]) ^ (v0 + suma) ^ ((v0 >> 5) + K[3])
+        var t4 : uint = 0'
+        var t5 : uint = 0'
+        var t6 : uint = 0'
+
+        @boveda
+        tea_add1(t4, v0, 2)'
+        tea_add2(t5, v0, 3)'
+        @code
+
+        t6 = v0 + suma'
+        t4 = t4 ^ t6'
+        t4 = t4 ^ t5'
+        v1 = v1 - t4'
+
+        # v0 -= ((v1 << 4) + K[0]) ^ (v1 + suma) ^ ((v1 >> 5) + K[1])
+        var t1 : uint = 0'
+        var t2 : uint = 0'
+        var t3 : uint = 0'
+
+        @boveda
+        tea_add1(t1, v1, 0)'
+        tea_add2(t2, v1, 1)'
+        @code
+
+        t3 = v1 + suma'
+        t1 = t1 ^ t3'
+        t1 = t1 ^ t2'
+        v0 = v0 - t1'
+
+        suma = suma - DELTA'
+    }
+
+    datos[0] = v0'
+    datos[1] = v1'
+
+    @boveda
+    logout()'
+    @code
+}
+
+func main() :: void {
+    tea_descifrar()'
+}
