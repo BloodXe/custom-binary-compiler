@@ -377,8 +377,21 @@ class AsmGen:
     # IndexAccess: para arr[i], obtenemos la dirección base del arreglo y calculamos la dirección del 
     # elemento con desplazamiento (index * 4), luego cargamos el valor
     def visit_IndexAccess(self, node) -> str:
+        
+        # Caso especial para mem[i]: el identificador "mem" es un caso especial reservado para acceder a memoria absoluta
+        if isinstance(node.target, Identifier) and node.target.name == "mem":
+            r_addr = self.visit(node.indices[0])
+
+            r_val = self._alloc_reg()
+            self._emit(f"load {r_val}, 0({r_addr})")
+
+            self._free_if_temp(r_addr)
+            return r_val
+        
+        # Para otros casos de a arreglos, resolvemos la dirección base del arreglo (puede ser global o local) y luego calculamos la dirección del elemento con el índice
         r_base  = self._resolve_array_base(node.target)
         r_index = self.visit(node.indices[0])
+        
 
         # Calcular offset = index * 4
         r_shift = self._alloc_reg()
@@ -1005,6 +1018,19 @@ class AsmGen:
 
         # Si el destino es un acceso a índice, calculamos la dirección del elemento y almacenamos allí
         elif isinstance(node.target, IndexAccess):
+
+            # Caso especial: si el acceso a índice es mem[i], entonces el destino es memoria absoluta y no un arreglo; 
+            # calculamos la dirección directamente sin resolver base de arreglo
+            if isinstance(node.target.target, Identifier) and node.target.target.name == "mem":
+                r_addr = self.visit(node.target.indices[0])  # evaluar addr+4
+                # r_val ya está calculado al inicio de visit_Assignment, no visitar de nuevo
+                self._emit(f"store {r_val}, 0({r_addr})")
+                self._free_if_temp(r_addr)
+                self._free_if_temp(r_val)
+                return
+
+            # Caso general: el destino es un acceso a índice de un arreglo o matriz (arr[i] o matrix[i][j]); calculamos la dirección del elemento y almacenamos allí
+
             # arr[i] = val  o  matrix[i][j] = val
             r_index = self.visit(node.target.indices[0]) # Registro con el valor del índice (i para arr[i], j para matrix[i][j])
 

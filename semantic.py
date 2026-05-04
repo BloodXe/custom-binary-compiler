@@ -224,6 +224,8 @@ class SemanticAnalyzer:
         if isinstance(node, StringLiteral):
             return 'string'
         if isinstance(node, Identifier):
+            if node.name == "mem":
+                return '[*]uint'   # array infinito de uint (conceptual)
             s = self.symbol_table.lookup(node.name)
             return s.type_str if s else '?'
         if isinstance(node, IndexAccess):
@@ -301,6 +303,12 @@ class SemanticAnalyzer:
         self.visit(n.value)
         t = type_str(n.type_)
         sz = size_of(n.type_)
+        
+        # Para evitar conflictos con la palabra reservada 'mem', que representa la memoria en el lenguaje, no permitimos declarar variables con ese nombre. 
+        # Esto es parte de la regla semántica RS-02, que prohíbe repetir nombres, ya que 'mem' es un identificador especial reservado para acceder a la memoria
+        if n.name == "mem":
+            self.error("RS-02: 'mem' es reservado para memoria", n)
+            return
 
         if self.current_func is None:
             addr  = self.alloc_global(sz)
@@ -319,6 +327,10 @@ class SemanticAnalyzer:
         t = type_str(n.type_)
         sz = size_of(n.type_)
 
+        # Para evitar definir mem
+        if n.name == "mem":
+            self.error("RS-02: 'mem' es reservado para memoria", n)
+            return
         if self.current_func is None:
             addr  = self.alloc_global(sz)
             scope = 'global'
@@ -349,6 +361,9 @@ class SemanticAnalyzer:
     #regla semantica 1 = tiene que estar declarado
     #regla semantica 3 = no puede ser constante
     def check_lvalue(self, node): 
+        # Permitir mem sin declarar, ya que es un identificador especial reservado para acceder a la memoria. 
+        if isinstance(node, Identifier) and node.name == "mem":
+            return
         if isinstance(node, Identifier):
             s = self.symbol_table.lookup(node.name)
             if s is None:
@@ -425,6 +440,8 @@ class SemanticAnalyzer:
             self.visit(arg)
 
     def visit_Identifier(self, n):
+        if n.name == "mem":
+            return  # permitir mem sin declarar
         #RS-01: tiene que estar declarado antes de usarse
         if self.symbol_table.lookup(n.name) is None:
             self.error(f"RS-01: '{n.name}' no fue declarado", n)

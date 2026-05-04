@@ -20,12 +20,15 @@ const DELTA : uint = 0x9E3779B9'
 # Datos a cifrar — el simulador puede precargar valores aqui
 # o se pueden cambiar directamente en memoria antes de ejecutar
 
-var datos : [2] uint = [0x00112233, 0x44556677]'
+var final : uint = 10' # Variable que indica el final del archivo en memoria
 
-func tea_cifrar() :: void {
+#Posicion de memoria inicial del archivo a desencriptar
+var addr : int = 0'
 
-    var v0 : uint = datos[0]'
-    var v1 : uint = datos[1]'
+func tea_cifrar(addr:int) :: void {
+
+    var v0 : uint = mem[addr]'
+    var v1 : uint = mem[addr + 4]'
     var suma : uint = 0'
     var i : int = 0'
     var token : uint = 0xDDAABBCF' 
@@ -86,9 +89,9 @@ func tea_cifrar() :: void {
         v1 = v1 + t4'
     }
 
-    # Guardar resultado cifrado en datos[]
-    datos[0] = v0'
-    datos[1] = v1'
+    # Guardar resultado cifrado en memoria
+    mem[addr] = v0'
+    mem[addr + 4] = v1'
 
     @boveda
     logout()'   # cerrar sesion al terminar
@@ -96,5 +99,12 @@ func tea_cifrar() :: void {
 }
 
 func main() :: void {
-    tea_cifrar()'
+
+    mientras (addr < final){
+
+        tea_cifrar(addr)'
+
+        addr = addr + 8'
+    }
+
 }

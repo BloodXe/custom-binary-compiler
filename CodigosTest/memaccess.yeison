@@ -1,0 +1,9 @@
+func main()::void {
+
+    var addr : int = 256'
+    
+    var x : uint = 5'
+
+    mem[addr] = x'
+   
+}
