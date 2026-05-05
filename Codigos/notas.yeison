@@ -1,0 +1,39 @@
+# notas.yeison
+# Ejercicio 3: Clasificador de notas
+
+func nota_mas_alta(notas : [5]int, n : int) :: int {
+    var max : int = notas[0]'
+    var i : int = 1'
+
+    mientras (i < n) {
+        si (notas[i] > max) {
+            max = notas[i]'
+        }
+        i = i + 1'
+    }
+    retorna max'
+}
+
+func contar_aprobados(notas : [5]int, n : int) :: int {
+    var cuenta : int = 0'
+    var i : int = 0'
+
+    mientras (i < n) {
+        si (notas[i] >= 70) {
+            cuenta = cuenta + 1'
+        }
+        i = i + 1'
+    }
+    retorna cuenta'
+}
+
+func main() :: void {
+    var notas : [5]int = [85, 60, 90, 45, 70]'
+    var n : int = 5'
+
+    var aprobados : int = contar_aprobados(notas, n)'
+    var reprobados : int = n - aprobados'
+    var mejor : int = nota_mas_alta(notas, n)'
+
+    retorna'
+}

@@ -1,0 +1,80 @@
+110000 // lli r2, 0, 0
+1102E0 // lli r2, 0xE0, 1
+388030 // jal r1, 48
+480000 // halt
+0917FC // addi r2, r2, -4
+0C0000 // addi r8, r0, 0
+241000 // store r8, 0(r2)
+0917FC // addi r2, r2, -4
+0C0000 // addi r8, r0, 0
+241000 // store r8, 0(r2)
+0917FC // addi r2, r2, -4
+0C0000 // addi r8, r0, 0
+241000 // store r8, 0(r2)
+1C1008 // load r8, 8(r2)
+0C8005 // addi r9, r0, 5
+34C015 // bge r8, r9, 21
+0C8000 // addi r9, r0, 0
+1C1008 // load r8, 8(r2)
+0D0002 // addi r10, r0, 2
+65C550 // sll r11, r8, r10
+644D80 // add r8, r9, r11
+1CC000 // load r9, 0(r8)
+642800 // add r8, r5, r0
+2C4C08 // bne r9, r8, 8
+0C0001 // addi r8, r0, 1
+241004 // store r8, 4(r2)
+1C1008 // load r8, 8(r2)
+241000 // store r8, 0(r2)
+0C0005 // addi r8, r0, 5
+241008 // store r8, 8(r2)
+380005 // jal r0, 5
+1C1008 // load r8, 8(r2)
+0C8001 // addi r9, r0, 1
+65C480 // add  r11, r8, r9
+259008 // store r11, 8(r2)
+387FEA // jal r0, -22
+1D9004 // load r11, 4(r2)
+0C8001 // addi r9, r0, 1
+2CDC06 // bne r11, r9, 6
+1C9000 // load r9, 0(r2)
+624800 // add r4, r9, r0
+09100C // addi r2, r2, 12
+408000 // jr r1
+380005 // jal r0, 5
+0C8000 // addi r9, r0, 0
+624800 // add r4, r9, r0
+09100C // addi r2, r2, 12
+408000 // jr r1
+09100C // addi r2, r2, 12
+408000 // jr r1
+0917EC // addi r2, r2, -20
+0C800A // addi r9, r0, 10
+249000 // store r9, 0(r2)
+0C8019 // addi r9, r0, 25
+249004 // store r9, 4(r2)
+0C8025 // addi r9, r0, 37
+249008 // store r9, 8(r2)
+0C802A // addi r9, r0, 42
+24900C // store r9, 12(r2)
+0C8008 // addi r9, r0, 8
+249010 // store r9, 16(r2)
+0917FC // addi r2, r2, -4
+0C8025 // addi r9, r0, 37
+249000 // store r9, 0(r2)
+0917FC // addi r2, r2, -4
+0917FC // addi r2, r2, -4
+209000 // store r1, 0(r2)
+1C900C // load r9, 12(r2)
+624800 // add r4, r9, r0
+1C9008 // load r9, 8(r2)
+62C800 // add r5, r9, r0
+38FFBD // jal r1, -67
+189000 // load r1, 0(r2)
+091004 // addi r2, r2, 4
+64A000 // add r9, r4, r0
+249000 // store r9, 0(r2)
+1C9000 // load r9, 0(r2)
+624800 // add r4, r9, r0
+09101C // addi r2, r2, 28
+408000 // jr r1

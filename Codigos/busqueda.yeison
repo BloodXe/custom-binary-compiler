@@ -1,0 +1,30 @@
+
+@code
+func buscar(datos : [5]int, objetivo : int) :: int {
+    var i      : int = 0'
+    var encontrado : int = 0'
+    var posicion   : int = 0'
+
+    mientras (i < 5) {
+        si (datos[i] == objetivo) {
+            encontrado = 1'
+            posicion   = i'
+            i = 5'          # forzar salida del ciclo
+        } sino {
+            i = i + 1'
+        }
+    }
+
+    si (encontrado == 1) {
+        retorna posicion'
+    } sino {
+        retorna 0'          # no encontrado
+    }
+}
+func main() :: int {
+    var datos : [5]int = [10, 25, 37, 42, 8]'
+    var objetivo : int = 37'
+
+    var pos : int = buscar(datos, objetivo)'
+    retorna pos'
+}
