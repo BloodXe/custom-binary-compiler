@@ -1,0 +1,41 @@
+#dqwdgqwud 123124 @ * _ r ñ
+#    comentarios para ver si se borran
+
+const delta : uint = 0x9e3779b9'
+@boveda
+func tea_cifrar(v : [2] uint, llave : [4] uint) :: void {
+    var v0 : uint = v[0]'
+    var v1 : uint = v[1]'
+    var suma : uint = 0'
+
+    para (i = 0' i < 32' i = i + 1') {
+        suma = suma + delta'
+        v0 = v0 + (((v1 << 4) + llave[0]) ^ (v1 + suma) ^ ((v1 >> 5) + llave[1]))'
+        v1 = v1 + (((v0 << 4) + llave[2]) ^ (v0 + suma) ^ ((v0 >> 5) + llave[3]))'
+    }
+
+    v[0] = v0'
+    v[1] = v1'
+}
+## fjdhej
+f efwef wef wef wef 
+fwefwefwe
+fwefwef 
+
+123123 
+
+##
+func tea_descifrar(v : [2] uint, llave : [4] uint) :: void {
+    var v0 : uint = v[0]'
+    var v1 : uint = v[1]'
+    var suma : uint = delta * 32'
+
+    para (i = 0' i < 32' i = i + 1') {
+        v1 = v1 - (((v0 << 4) + llave[2]) ^ (v0 + suma) ^ ((v0 >> 5) + llave[3]))'
+        v0 = v0 - (((v1 << 4) + llave[0]) ^ (v1 + suma) ^ ((v1 >> 5) + llave[1]))'
+        suma = suma - delta'
+    }
+
+    v[0] = v0'
+    v[1] = v1'
+}

@@ -1,0 +1,11 @@
+var x : int = 10'
+
+func foo() :: int {
+    var x : int = 5'
+    retorna x'
+}
+
+func main() :: void{
+    var y : int = 0'
+    y = foo()'
+}

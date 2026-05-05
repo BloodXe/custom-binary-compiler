@@ -1,0 +1,6 @@
+func suma(a : int, b : int) :: int {
+    retorna a + b'
+}
+
+var x : int = 0'
+x = suma(3 + 2, 4 * 2)'

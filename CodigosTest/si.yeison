@@ -1,0 +1,15 @@
+var x : int = 5'
+
+func test() :: void {
+    si (x > 3) {
+        x = 10'
+    } sino {
+        x = 0'
+    }
+}
+
+func main()::void{
+
+    test()'
+    
+}
