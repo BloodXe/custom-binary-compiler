@@ -1,6 +1,7 @@
 # Assembly Generator — TEA-ISA 23-bit
 # Ejecucion: python3 main.py CodigosTest/<input_file> -S
 
+from platform import node
 import sys
 from ast_nodes import (
     Program, SectionBlock, FunctionDeclaration, VarDeclaration, ConstDeclaration,
@@ -366,9 +367,8 @@ class AsmGen:
         # Variable / constante global: Cargar desde memoria absoluta
         sym = self.semantic.symbol_table.lookup(name)
         addr = sym.address if sym else 0
-        r_addr = self._alloc_reg()
+        r_addr = self.load_immediate(addr * 4)
         r      = self._alloc_reg()
-        self._emit(f"addi {r_addr}, r0, {addr}")
         self._emit(f"load {r}, 0({r_addr})")
         self._free_reg(r_addr)
         return r
@@ -381,11 +381,18 @@ class AsmGen:
         # Caso especial para mem[i]: el identificador "mem" es un caso especial reservado para acceder a memoria absoluta
         if isinstance(node.target, Identifier) and node.target.name == "mem":
             r_addr = self.visit(node.indices[0])
+            
+            # Multiplicar por 4 para convertir dirección lógica a dirección de palabra
+            r_addr4 = self._alloc_reg()
+            r_shift = self._alloc_reg()
+            self._emit(f"addi {r_shift}, r0, 2")
+            self._emit(f"sll {r_addr4}, {r_addr}, {r_shift}")
+            self._free_reg(r_shift)
+            self._free_if_temp(r_addr)
 
             r_val = self._alloc_reg()
-            self._emit(f"load {r_val}, 0({r_addr})")
-
-            self._free_if_temp(r_addr)
+            self._emit(f"load {r_val}, 0({r_addr4})")
+            self._free_reg(r_addr4)
             return r_val
         
         # Para otros casos de a arreglos, resolvemos la dirección base del arreglo (puede ser global o local) y luego calculamos la dirección del elemento con el índice
@@ -454,8 +461,7 @@ class AsmGen:
             # Global: Dirección absoluta
             sym  = self.semantic.symbol_table.lookup(name)
             addr = sym.address if sym else 0
-            r    = self._alloc_reg()
-            self._emit(f"addi {r}, r0, {addr}")
+            r = self.load_immediate(addr * 4)
             return r
 
         if isinstance(node, IndexAccess):
@@ -605,61 +611,53 @@ class AsmGen:
     # Funcion de multiplicación: se emite como un loop de suma repetida (res = 0; while b != 0: res += a; b--)
     def _emit_mul(self, node) -> str:
         from ast_nodes import FunctionCall as FC
- 
+
         r_a = self.visit(node.left)
- 
-        # Si el operando derecho es una llamada a función,
-        # los temporales pueden ser destruidos durante la llamada.
-        # Guardamos r_a en el stack antes de evaluar el lado derecho.
+
         right_is_call = isinstance(node.right, FC)
- 
+
         if right_is_call:
-            # PUSH r_a al stack
             self._emit("addi r2, r2, -4")
             self._emit(f"store {r_a}, 0(r2)")
-            # Ajustar offsets locales por el PUSH
             for k in self.current_locals:
                 self.current_locals[k] += 4
             self.local_offset += 4
             self._free_if_temp(r_a)
- 
-            # Evaluar el lado derecho (la llamada)
+
             r_b = self.visit(node.right)
- 
-            # POP r_a del stack
+
             r_a = self._alloc_reg()
             self._emit(f"load {r_a}, 0(r2)")
             self._emit("addi r2, r2, 4")
-            # Restaurar offsets locales
             for k in self.current_locals:
                 self.current_locals[k] -= 4
             self.local_offset -= 4
         else:
             r_b = self.visit(node.right)
- 
-        # Loop de multiplicación por suma repetida:
-        # res = 0; cnt = b; while cnt != 0: res += a; cnt--
+
         r_res = self._alloc_reg()
         r_cnt = self._alloc_reg()
-        self._free_if_temp(r_b)   # liberar r_b antes de alocar r_one
- 
+
+        # ANTES: liberaba r_b antes de usarlo en "add r_cnt, r_b, r0"
+        # AHORA: guardamos el valor antes de liberar
         lbl_loop = f"mul_loop_{self._mul_count}"
         lbl_end  = f"mul_end_{self._mul_count}"
         self._mul_count += 1
- 
-        self._emit(f"addi {r_res}, r0, 0")       # res = 0
-        self._emit(f"add  {r_cnt}, {r_b}, r0")   # cnt = b
- 
+
+        self._emit(f"addi {r_res}, r0, 0")
+        self._emit(f"add  {r_cnt}, {r_b}, r0")  # usar r_b ANTES de liberar
+        self._free_if_temp(r_b)                  # liberar DESPUÉS
+
         r_one = self._alloc_reg()
-        self._emit(f"addi {r_one}, r0, 1")        # constante 1
- 
+        self._emit(f"addi {r_one}, r0, 1")
+
         self._emit_label(lbl_loop)
-        self._emit(f"beq  {r_cnt}, r0, {lbl_end}")           # si cnt==0: fin
-        self._emit(f"add  {r_res}, {r_res}, {r_a}")          # res += a
-        self._emit(f"sub  {r_cnt}, {r_cnt}, {r_one}")        # cnt--
+        self._emit(f"beq  {r_cnt}, r0, {lbl_end}")
+        self._emit(f"add  {r_res}, {r_res}, {r_a}")
+        self._emit(f"sub  {r_cnt}, {r_cnt}, {r_one}")
         self._emit(f"jal  r0, {lbl_loop}")
         self._emit_label(lbl_end)
- 
+
         self._free_if_temp(r_a)
         self._free_reg(r_one)
         self._free_reg(r_cnt)
@@ -706,17 +704,13 @@ class AsmGen:
     # Función principal para visitar llamadas a función: maneja tanto llamadas normales como 
     # instrucciones de bóveda (que se emiten directamente como mnemónicas ISA)
     def visit_FunctionCall(self, node) -> str:
-        # PUSH ra: bajar SP y guardar r1
-        # Antes de bajar SP, ajustar offsets locales para que sigan
-        # apuntando correctamente después del PUSH
         for k in self.current_locals:
             self.current_locals[k] += 4
         self.local_offset += 4
- 
+
         self._emit("addi r2, r2, -4")
         self._emit("store r1, 0(r2)")
- 
-        # Evaluar argumentos y colocarlos en r4..r7
+
         for i, arg in enumerate(node.args):
             if i >= len(ARG_REGS):
                 raise RuntimeError(
@@ -726,20 +720,26 @@ class AsmGen:
             r_arg = self.visit(arg)
             self._emit(f"add {ARG_REGS[i]}, {r_arg}, r0")
             self._free_if_temp(r_arg)
- 
-        # Llamada
+
         self._emit(f"jal r1, {node.name}")
- 
-        # POP ra: restaurar r1 y subir SP
+
         self._emit("load r1, 0(r2)")
         self._emit("addi r2, r2, 4")
- 
-        # Restaurar offsets locales al valor anterior al PUSH
+
         for k in self.current_locals:
             self.current_locals[k] -= 4
         self.local_offset -= 4
- 
-        # Copiar retorno a temporal
+
+        # ANTES: siempre emitía add r_ret, r4, r0
+        # AHORA: solo si la función no es void
+        sym = self.semantic.symbol_table.lookup(node.name)
+        is_void = (sym is not None and 
+                hasattr(sym, 'return_type') and 
+                sym.return_type == 'void')
+
+        if is_void:
+            return None  # no hay valor de retorno
+        
         r_ret = self._alloc_reg()
         self._emit(f"add {r_ret}, r4, r0")
         return r_ret
@@ -748,17 +748,15 @@ class AsmGen:
     # Para las llamadas a función usadas como sentencias (sin usar el valor de retorno), manejamos las instrucciones de bóveda directamente 
     # y para llamadas normales, simplemente evaluamos la llamada sin usar el valor de retorno.
     def visit_ExpressionStatement(self, node):
-        """Llamada a función usada como sentencia (valor de retorno descartado)."""
         expr = node.expr
 
-        # Instrucciones de bóveda: Emitir mnemónica ISA directa
         if isinstance(expr, FunctionCall) and expr.name in VAULT_OPS:
-            self._emit_vault_op(expr) # Emitir la mnemónica ISA correspondiente a la instrucción de bóveda
+            self._emit_vault_op(expr)
             return
 
-        # Llamada a función normal
         r = self.visit(expr)
-        self._free_if_temp(r)
+        if r is not None:
+            self._free_if_temp(r)
 
     
     #  Instrucciones de bóveda (@boveda)                                   
@@ -969,15 +967,14 @@ class AsmGen:
             for i, elem in enumerate(value_node.elements):
                 r = self.visit(elem) # Evaluar el elemento del array y obtener su valor en un registro
                 r_addr = self._alloc_reg() # Registro para la dirección del elemento actual (dirección base + offset)
-                self._emit(f"addi {r_addr}, r0, {addr + i * WORD}")
+                self._emit(f"addi {r_addr}, r0, {(addr + i * WORD) * 4}")
                 self._emit(f"store {r}, 0({r_addr})")
                 self._free_if_temp(r)
                 self._free_reg(r_addr)
         # Para una variable simple, evaluamos su valor y lo almacenamos en la dirección absoluta correspondiente en memoria
         else:
             r = self.visit(value_node) # Evaluar el valor de la variable y obtenerlo en un registro
-            r_addr = self._alloc_reg() # Registro para la dirección de la variable global
-            self._emit(f"addi {r_addr}, r0, {addr}")
+            r_addr = self.load_immediate(addr * 4)
             self._emit(f"store {r}, 0({r_addr})")
             self._free_if_temp(r)
             self._free_reg(r_addr)
@@ -1010,8 +1007,7 @@ class AsmGen:
             # Variable global
             sym    = self.semantic.symbol_table.lookup(name)
             addr   = sym.address if sym else 0
-            r_addr = self._alloc_reg()
-            self._emit(f"addi {r_addr}, r0, {addr}")
+            r_addr = self.load_immediate(addr * 4)
             self._emit(f"store {r_val}, 0({r_addr})")
             self._free_if_temp(r_val)
             self._free_reg(r_addr)
@@ -1022,10 +1018,18 @@ class AsmGen:
             # Caso especial: si el acceso a índice es mem[i], entonces el destino es memoria absoluta y no un arreglo; 
             # calculamos la dirección directamente sin resolver base de arreglo
             if isinstance(node.target.target, Identifier) and node.target.target.name == "mem":
-                r_addr = self.visit(node.target.indices[0])  # evaluar addr+4
-                # r_val ya está calculado al inicio de visit_Assignment, no visitar de nuevo
-                self._emit(f"store {r_val}, 0({r_addr})")
+                r_addr = self.visit(node.target.indices[0])
+                
+                # Multiplicar por 4
+                r_addr4 = self._alloc_reg()
+                r_shift = self._alloc_reg()
+                self._emit(f"addi {r_shift}, r0, 2")
+                self._emit(f"sll {r_addr4}, {r_addr}, {r_shift}")
+                self._free_reg(r_shift)
                 self._free_if_temp(r_addr)
+
+                self._emit(f"store {r_val}, 0({r_addr4})")
+                self._free_if_temp(r_addr4)
                 self._free_if_temp(r_val)
                 return
 
@@ -1157,42 +1161,30 @@ class AsmGen:
         lbl_start = node._lbl_start
         lbl_end   = node._lbl_end
 
-        # Pre-registrar la variable de control como local si no existe
+       # Pre-registrar la variable de control como local si no existe
         if isinstance(node.init, Assignment):
-            
-            target = node.init.target
-
-            # Si el target de la asignación es un Identifier, verificamos si ya existe como local o parámetro; 
-            # si no, lo pre-registramos como una nueva variable local en el frame para que pueda ser usada dentro del loop.
-            if isinstance(target, Identifier):
+           from ast_nodes import Identifier as _Id
+           target = node.init.target
+           if isinstance(target, _Id):
                 var_name = target.name
-
-                # Si la variable de control no está ya declarada como local ni es un parámetro, 
-                # la pre-registramos como una nueva variable local en el frame del loop.
-                if (var_name not in self.current_locals and var_name not in self.current_params):
-
+                if (var_name not in self.current_locals
+                        and var_name not in self.current_params):
                     self._emit(f"addi r2, r2, -4")
-
-                    # Para mantener los offsets relativos correctos, incrementamos en 4 el offset de todas 
-                    # las variables locales preexistentes (ya que el frame crece hacia abajo), y luego 
-                    # registramos la nueva variable local con un offset de 0 (el nuevo tope del frame).
                     for k in list(self.current_locals):
                         self.current_locals[k] += 4
-                    
                     self.current_locals[var_name] = 0
                     self.local_offset += 4
-
         self.visit(node.init)
         self._emit_label(lbl_start)
         self._emit_branch_condition(node.condition, lbl_end)
 
-        # Emitir código para el cuerpo del loop
         for stmt in node.body:
-            self.visit(stmt)
+           self.visit(stmt)
 
         self.visit(node.update)
         self._emit(f"jal r0, {lbl_start}")
         self._emit_label(lbl_end)
+
 
 
     

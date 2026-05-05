@@ -90,13 +90,13 @@ func tea_descifrar(addr:uint) :: void {
 
 func main() :: void {
 
-    var final : uint = 16'   # múltiplo de 8
+    var final : uint = 16'   # múltiplo de 2
     var addr : int = 0'
 
     mientras (addr < final){
 
         tea_descifrar(addr)'
 
-        addr = addr + 8'
+        addr = addr + 2'
     }
 }

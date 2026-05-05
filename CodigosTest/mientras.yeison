@@ -1,7 +1,8 @@
-func test() :: void {
+
+
+func main() :: void {
     var x : int = 0'
-    
-    mientras (x < 3) {
+    mientras (x < 4) {
         x = x + 1'
     }
 }

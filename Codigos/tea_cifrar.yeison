@@ -1,117 +1,74 @@
-# Test 2: Cifrado TEA
-#
-# La llave de 128 bits se carga en el vault via @boveda.
-# Los datos a cifrar van como arreglo global.
-# Despues de compilar, usar -m para ver la direccion de 'datos'
-# y cargar ahi el bloque a cifrar con load_file.py.
-#
-# Llave  : [0x01234567, 0x89ABCDEF, 0xFEDCBA98, 0x76543210]
-# Entrada: [0x00112233, 0x44556677]
-# Salida esperada cifrada: depende de la llave
-#
-# Instruccion para probar:
-#   python main.py test_cifrar.yeison -b -m -o cifrar
-#   python load_file.py --input cifrar.bin --output mem/cifrar.mem --address 0x0000
-#   (ejecutar en simulador)
-
-# Constante TEA
 const DELTA : uint = 0x9E3779B9'
 
-# Datos a cifrar — el simulador puede precargar valores aqui
-# o se pueden cambiar directamente en memoria antes de ejecutar
+func tea_cifrar(addr : uint) :: void {
 
-
-
-func tea_cifrar(addr:uint) :: void {
-
-    # Calculamos la posicion siguiente en memoria
-    var addr2 : uint = addr + 4'
-
-    # Traemos los valores de memoria
+    var addr_local : uint = addr'
+    var addr2 : uint = addr + 1'
     var v0 : uint = mem[addr]'
     var v1 : uint = mem[addr2]'
-
     var suma : uint = 0'
-    var i : int = 0'
-    var token : uint = 0xDDAABBCF' 
+    var token : uint = 0xDDAABBCF'
 
     @boveda
-    # Primero configurar contrasena y hacer login (primera vez, no requiere AUTH)
     authorize(0, token)'
-    setpwd(0, 1234)'   # usuario 0, contrasena 1234
-    login(0, 1234)'    # activar AUTH
-
-    # Cargar llave de 128 bits en el vault (4 palabras de 32 bits)
+    setpwd(0, 1234)'
+    login(0, 1234)'
     var k0 : uint = 0x01234567'
     var k1 : uint = 0x89ABCDEF'
     var k2 : uint = 0xFEDCBA98'
     var k3 : uint = 0x76543210'
-
-    vkload(k0, 0)'   # K[0] = 0x01234567
-    vkload(k1, 1)'   # K[1] = 0x89ABCDEF
-    vkload(k2, 2)'   # K[2] = 0xFEDCBA98
-    vkload(k3, 3)'   # K[3] = 0x76543210
+    vkload(k0, 0)'
+    vkload(k1, 1)'
+    vkload(k2, 2)'
+    vkload(k3, 3)'
     @code
 
-    # 32 rondas de cifrado TEA
+    var t1 : uint = 0'
+    var t2 : uint = 0'
+    var t3 : uint = 0'
+    var t4 : uint = 0'
+    var t5 : uint = 0'
+    var t6 : uint = 0'
+    
     para (i = 0' i < 32' i = i + 1') {
         suma = suma + DELTA'
-
-        # v0 += ((v1 << 4) + K[0]) ^ (v1 + suma) ^ ((v1 >> 5) + K[1])
-        # Usando tea_add1 y tea_add2 del vault:
-        #   tea_add1(dest, src, ki) => dest = (src << 4) + K[ki]
-        #   tea_add2(dest, src, ki) => dest = (src >> 5) + K[ki]
-        var t1 : uint = 0'
-        var t2 : uint = 0'
-        var t3 : uint = 0'
-
+        t1 = 0'
+        t2 = 0'
+        t3 = 0'
         @boveda
-        tea_add1(t1, v1, 0)'   # t1 = (v1 << 4) + K[0]
-        tea_add2(t2, v1, 1)'   # t2 = (v1 >> 5) + K[1]
+        tea_add1(t1, v1, 0)'
+        tea_add2(t2, v1, 1)'
         @code
-
         t3 = v1 + suma'
         t1 = t1 ^ t3'
         t1 = t1 ^ t2'
         v0 = v0 + t1'
-
-        # v1 += ((v0 << 4) + K[2]) ^ (v0 + suma) ^ ((v0 >> 5) + K[3])
-        var t4 : uint = 0'
-        var t5 : uint = 0'
-        var t6 : uint = 0'
-
+        t4 = 0'
+        t5 = 0'
+        t6 = 0'
         @boveda
-        tea_add1(t4, v0, 2)'   # t4 = (v0 << 4) + K[2]
-        tea_add2(t5, v0, 3)'   # t5 = (v0 >> 5) + K[3]
+        tea_add1(t4, v0, 2)'
+        tea_add2(t5, v0, 3)'
         @code
-
         t6 = v0 + suma'
         t4 = t4 ^ t6'
         t4 = t4 ^ t5'
         v1 = v1 + t4'
     }
 
-    # Guardar resultado cifrado en memoria
-    mem[addr] = v0'
-    mem[addr + 4] = v1'
-
-    @boveda
-    logout()'   # cerrar sesion al terminar
-    @code
+    mem[addr_local] = v0'
+    mem[addr_local + 1] = v1'
 }
 
 func main() :: void {
-
-    var final : uint = 10' # Variable que indica el final del archivo en memoria
-
-    #Posicion de memoria inicial del archivo a desencriptar
-    var addr : uint = 0'
-
-    mientras (addr < final){
-
+    var addr : uint = 4096'
+    var final : uint = 13*2'
+    final = final + addr'
+    mientras (addr < final) {
         tea_cifrar(addr)'
-
-        addr = addr + 8'
+        addr = addr + 2'
     }
-
+    @boveda
+    logout()'
+    @code
 }

@@ -1,8 +1,9 @@
 var i : int = 0'
 
 func test() :: void {
+    var x : int = i'
     para ( i = 0' i < 3' i = i + 1') {
-        var x : int = i'
+        x = x + i'
     }
 }
 func main() :: void {

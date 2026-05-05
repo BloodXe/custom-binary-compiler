@@ -1,8 +1,17 @@
+
+const hola : int = 10'
+
 func main()::void {
 
-    var addr : int = 256'
+    var addr : int = 4096'
     
-    var x : uint = 5'
+    var x : uint = 7'
+
+    mem[addr] = x'
+
+    addr = addr + 1'
+
+    x = x - 3'
 
     mem[addr] = x'
    
