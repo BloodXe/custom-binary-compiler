@@ -1,0 +1,26 @@
+
+# Test: Factorial de 5
+# Salida esperada: 120
+
+
+func factorial(n : int):: int {
+
+    si (n <= 1){
+
+        retorna 1'
+
+    }
+    sino{
+
+        retorna n * factorial(n - 1)'
+
+    }
+}
+
+func main()::void{
+
+    var n : int = 5'
+
+    factorial(n)'
+
+}

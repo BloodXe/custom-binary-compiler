@@ -160,10 +160,11 @@ Ejemplos:
   python main.py programa.yeison -b -x       # compilar a .bin y .hex
   python main.py programa.yeison -a          # todo (AST, tokens, ASM, binario)
   python main.py programa.yeison -b -o salida  # binario en salida.bin
+  python main.py programa.asm -A -b          # compilar desde .asm directo
         """
     )
 
-    ap.add_argument('archivo',            help='Archivo fuente .yeison')
+    ap.add_argument('archivo',            help='Archivo fuente .yeison o .asm')
     ap.add_argument('-v', '--verbose',    action='store_true', help='Mostrar AST')
     ap.add_argument('-l', '--lexer',      action='store_true', help='Mostrar tokens')
     ap.add_argument('-s', '--semantico',  action='store_true', help='Mostrar tabla de símbolos')
@@ -174,6 +175,7 @@ Ejemplos:
     ap.add_argument('-x', '--hex',        action='store_true', help='Generar hex dump .hex (requiere -b)')
     ap.add_argument('-o', '--output',     help='Nombre base del archivo de salida (sin extensión)')
     ap.add_argument('-a', '--all',        action='store_true', help='Activar todos los reportes y generar binario')
+    ap.add_argument('-A', '--from-asm',   action='store_true', help='Compilar desde .asm (saltar fases 1-3)')
 
     args = ap.parse_args()
 
@@ -188,19 +190,36 @@ Ejemplos:
         args.binario   = True
         args.hex       = True
 
-    # Cargar fuente resolviendo imports
-    try:
-        source = load_with_imports(args.archivo)
-    except FileNotFoundError as e:
-        print(f'Error: {e}')
-        return 1
+    # Determinar nombre base de salida
+    if args.output:
+        base_name = args.output
+    else:
+        base_name = os.path.splitext(args.archivo)[0]
 
-    # Fases 1-3: léxico, sintáctico, semántico
-    ast, sem = run_phases_1_to_3(source, args)
+    # ── Obtener asm_code: desde .asm directo o desde pipeline normal ──
+    if args.from_asm:
+        try:
+            with open(args.archivo, encoding='utf-8') as f:
+                asm_code = f.read()
+        except FileNotFoundError:
+            print(f'Error: archivo no encontrado: {args.archivo}')
+            return 1
+    else:
+        # Cargar fuente resolviendo imports
+        try:
+            source = load_with_imports(args.archivo)
+        except FileNotFoundError as e:
+            print(f'Error: {e}')
+            return 1
 
-    # Fase 4: Generación de ensamblador
-    gen      = AsmGen(sem)
-    asm_code = gen.generate(ast)
+        # Fases 1-3: léxico, sintáctico, semántico
+        ast, sem = run_phases_1_to_3(source, args)
+
+        # Fase 4: Generación de ensamblador
+        gen      = AsmGen(sem)
+        asm_code = gen.generate(ast)
+
+    # ── Desde aquí igual para ambas ramas ──
 
     if args.asm:
         print('\n=== ASM GENERADO ===\n')
@@ -220,14 +239,6 @@ Ejemplos:
             for label, addr in resolver.get_label_table().items():
                 print(f'  {label:<30} 0x{addr:04X}')
 
-    
-    # Determinar nombre base de salida
-    if args.output:
-        base_name = args.output
-    else:
-        base_name = os.path.splitext(args.archivo)[0]
-
-    
     # Guardar ASM si se pidió output y se generó ASM
     if args.output and args.asm:
         asm_path = base_name + '.asm'
@@ -235,10 +246,9 @@ Ejemplos:
             f.write(asm_code)
         print(f'\nASM guardado en: {asm_path}')
 
-    
     # Fase 6: Generación de binario
     if args.binario:
-        hex_path = (base_name + '.hex') if args.hex else None
+        hex_path = (base_name + '.mem') if args.hex else None
         bin_path = base_name + '.bin'
 
         bg = BinaryGen(resolved_asm)

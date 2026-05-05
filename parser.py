@@ -82,6 +82,9 @@ class Parser:
     def parse_statement(self):
         """Decide qué tipo de sentencia parsear según el token actual."""
         tok = self.current()
+        if tok.type == TokenType.ANNOTATION:
+            self.eat(TokenType.ANNOTATION)
+            return None  # las anotaciones no generan nodo AST, solo cambian el contexto de sección
         if tok.type == TokenType.VAR:      
             return self.parse_var_decl()
         if tok.type == TokenType.CONST:    
@@ -115,7 +118,20 @@ class Parser:
         self.eat(TokenType.LBRACE)
         stmts = []
         while not self.match(TokenType.RBRACE, TokenType.EOF):
-            stmts.append(self.parse_statement())
+            if self.match(TokenType.ANNOTATION):
+                ann = self.eat(TokenType.ANNOTATION).value
+                print(f"DEBUG: SectionBlock({ann})")  # ← agregar
+                body = []
+                while not self.match(TokenType.ANNOTATION, TokenType.RBRACE, TokenType.EOF):
+                    stmt = self.parse_statement()
+                    if stmt is not None:
+                        body.append(stmt)
+                stmts.append(SectionBlock(ann, body))
+                print(f"DEBUG: SectionBlock body size = {len(body)}")  # ← agregar
+            else:
+                stmt = self.parse_statement()
+                if stmt is not None:
+                    stmts.append(stmt)
         self.eat(TokenType.RBRACE)
         return stmts
 

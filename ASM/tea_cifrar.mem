@@ -1,0 +1,99 @@
+0917EC // addi r2, r2, -20  # reservar 5 palabras
+221010 // store r4, 16(r2)  # addr_base = r4
+0C8002 // addi r9, r0, 2
+6424D0 // sll  r8, r4, r9  # r8 = addr_base * 4 (dirección en bytes)
+1C4000 // load r8, 0(r8)  # r8 = mem[addr_base]
+241000 // store r8, 0(r2)  # v0 = r8
+0CA001 // addi r9, r4, 1  # r9 = addr_base + 1
+0D0002 // addi r10, r0, 2
+64CD50 // sll  r9, r9, r10  # r9 = (addr_base+1) * 4
+1CC800 // load r9, 0(r9)  # r9 = mem[addr_base+1]
+249004 // store r9, 4(r2)  # v1 = r9
+0C0000 // addi r8, r0, 0
+241008 // store r8, 8(r2)  # suma = 0
+0C0000 // addi r8, r0, 0
+24100C // store r8, 12(r2)  # i = 0
+0C0000 // addi r8, r0, 0  # uid = 0
+1480CF // lli  r9, 0xCF, 0  # token byte 0
+1482BB // lli  r9, 0xBB, 1  # token byte 1
+1484AA // lli  r9, 0xAA, 2  # token byte 2
+1486DD // lli  r9, 0xDD, 3  # token byte 3  → r9 = 0xDDAABBCF
+6C4803 // authorize r8, r9  # authorize(uid, token)
+0C0000 // addi r8, r0, 0  # uid = 0
+1480D2 // lli  r9, 0xD2, 0  # 1234 = 0x04D2, byte 0 = 0xD2
+148204 // lli  r9, 0x04, 1  # byte 1 = 0x04  → r9 = 1234
+6C4800 // setpwd r8, r9  # setpwd(uid, pwd)
+0C0000 // addi r8, r0, 0  # uid = 0
+1480D2 // lli  r9, 0xD2, 0  # pwd byte 0
+148204 // lli  r9, 0x04, 1  # pwd byte 1  → r9 = 1234
+6C4801 // login r8, r9  # login(uid, pwd)
+140067 // lli  r8, 0x67, 0
+140245 // lli  r8, 0x45, 1
+140423 // lli  r8, 0x23, 2
+140601 // lli  r8, 0x01, 3  # r8 = 0x01234567
+684004 // vkload r8, 0  # K[0] = r8
+1400EF // lli  r8, 0xEF, 0
+1402CD // lli  r8, 0xCD, 1
+1404AB // lli  r8, 0xAB, 2
+140689 // lli  r8, 0x89, 3  # r8 = 0x89ABCDEF
+684204 // vkload r8, 1  # K[1] = r8
+140098 // lli  r8, 0x98, 0
+1402BA // lli  r8, 0xBA, 1
+1404DC // lli  r8, 0xDC, 2
+1406FE // lli  r8, 0xFE, 3  # r8 = 0xFEDCBA98
+684404 // vkload r8, 2  # K[2] = r8
+140010 // lli  r8, 0x10, 0
+140232 // lli  r8, 0x32, 1
+140454 // lli  r8, 0x54, 2
+140676 // lli  r8, 0x76, 3  # r8 = 0x76543210
+684604 // vkload r8, 3  # K[3] = r8
+1C100C // load r8, 12(r2)  # r8 = i
+0C8020 // addi r9, r0, 32
+34C024 // bge  r8, r9, 36  # si i >= 32: salir
+1C1008 // load r8, 8(r2)  # r8 = suma
+1480B9 // lli  r9, 0xB9, 0  # DELTA byte 0
+148279 // lli  r9, 0x79, 1  # DELTA byte 1
+148437 // lli  r9, 0x37, 2  # DELTA byte 2
+14869E // lli  r9, 0x9E, 3  # DELTA byte 3  → r9 = 0x9E3779B9
+644480 // add  r8, r8, r9  # suma += DELTA
+241008 // store r8, 8(r2)  # guardar suma
+1C9004 // load  r9, 4(r2)  # r9 = v1
+544800 // tea_add1 r8, r9, 0  # r8 = (v1<<4) + K[0]
+1C9004 // load  r9, 4(r2)  # r9 = v1
+5D4A00 // tea_add2 r10, r9, 1  # r10 = (v1>>5) + K[1]
+1C9004 // load  r9, 4(r2)  # r9 = v1
+1D9008 // load  r11, 8(r2)  # r11 = suma
+64CD80 // add   r9, r9, r11  # r9 = v1 + suma
+6444C0 // xor   r8, r8, r9  # r8 = t1 ^ t3
+644540 // xor   r8, r8, r10  # r8 = t1 ^ t3 ^ t2
+1C9000 // load  r9, 0(r2)  # r9 = v0
+64CC00 // add   r9, r9, r8  # v0 += (t1^t3^t2)
+249000 // store r9, 0(r2)  # guardar v0
+1C9000 // load  r9, 0(r2)  # r9 = v0 (ya actualizado)
+544C00 // tea_add1 r8, r9, 2  # r8 = (v0<<4) + K[2]
+1C9000 // load  r9, 0(r2)  # r9 = v0
+5D4E00 // tea_add2 r10, r9, 3  # r10 = (v0>>5) + K[3]
+1C9000 // load  r9, 0(r2)  # r9 = v0
+1D9008 // load  r11, 8(r2)  # r11 = suma
+64CD80 // add   r9, r9, r11  # r9 = v0 + suma
+6444C0 // xor   r8, r8, r9  # r8 = t4 ^ t6
+644540 // xor   r8, r8, r10  # r8 = t4 ^ t6 ^ t5
+1C9004 // load  r9, 4(r2)  # r9 = v1
+64CC00 // add   r9, r9, r8  # v1 += (t4^t6^t5)
+249004 // store r9, 4(r2)  # guardar v1
+1C100C // load  r8, 12(r2)  # r8 = i
+0C4001 // addi  r8, r8, 1  # i++
+24100C // store r8, 12(r2)  # guardar i
+387FDB // jal r0, -37  # siguiente ronda
+1C1000 // load r8, 0(r2)  # r8 = v0
+1C9010 // load r9, 16(r2)  # r9 = addr_base
+0D0002 // addi r10, r0, 2
+654D50 // sll  r10, r9, r10  # r10 = addr_base * 4
+245000 // store r8, 0(r10)  # mem[addr_base] = v0
+1C1004 // load r8, 4(r2)  # r8 = v1
+0CC801 // addi r9, r9, 1  # r9 = addr_base + 1
+0D0002 // addi r10, r0, 2
+654D50 // sll  r10, r9, r10  # r10 = (addr_base+1)*4
+245000 // store r8, 0(r10)  # mem[addr_base+1] = v1
+091014 // addi r2, r2, 20
+408000 // jr   r1
