@@ -510,6 +510,10 @@ class AsmGen:
         # Multiplicación tiene su propio método que ya maneja el caso de FunctionCall
         if node.op == '*':
             return self._emit_mul(node)
+        elif node.op == '/':
+            return self._emit_div(node)
+        elif node.op == '%':
+            return self._emit_mod(node)
  
         # Evaluar lado izquierdo
         r1 = self.visit(node.left)
@@ -662,7 +666,55 @@ class AsmGen:
         self._free_reg(r_one)
         self._free_reg(r_cnt)
         return r_res
+    
+    # Funcion de division: se emite como un loop de resta repetida (res = 0; while a >= b: a -= b; res++)
+    def _emit_div(self, node) -> str:
+        r_a = self.visit(node.left)
+        r_b = self.visit(node.right)
 
+        r_res = self._alloc_reg()
+        r_cnt = self._alloc_reg()
+
+        lbl_loop = f"div_loop_{self._mul_count}"
+        lbl_end  = f"div_end_{self._mul_count}"
+        lbl_body = f"div_body_{self._mul_count}"
+        self._mul_count += 1
+
+        self._emit(f"addi {r_res}, r0, 0")      # res = 0
+        self._emit_label(lbl_loop)
+        self._emit(f"bge {r_a}, {r_b}, {lbl_body}")  # si a >= b: sigue
+        self._emit(f"jal r0, {lbl_end}")             # sino: fin
+        self._emit_label(lbl_body)
+        self._emit(f"sub {r_a}, {r_a}, {r_b}")   # a -= b
+        self._emit(f"addi {r_res}, {r_res}, 1")  # res++
+        self._emit(f"jal r0, {lbl_loop}")
+        self._emit_label(lbl_end)
+
+        self._free_if_temp(r_a)
+        self._free_if_temp(r_b)
+        self._free_reg(r_cnt)
+        return r_res
+
+    # Funcion de módulo: se emite como un loop de resta repetida (res = a; while res >= b: res -= b)
+    def _emit_mod(self, node) -> str:
+        r_a = self.visit(node.left)
+        r_b = self.visit(node.right)
+
+        lbl_loop = f"mod_loop_{self._mul_count}"
+        lbl_end  = f"mod_end_{self._mul_count}"
+        lbl_body = f"mod_body_{self._mul_count}"
+        self._mul_count += 1
+
+        self._emit_label(lbl_loop)
+        self._emit(f"bge {r_a}, {r_b}, {lbl_body}")  # si a >= b: sigue
+        self._emit(f"jal r0, {lbl_end}")              # sino: fin
+        self._emit_label(lbl_body)
+        self._emit(f"sub {r_a}, {r_a}, {r_b}")        # a -= b
+        self._emit(f"jal r0, {lbl_loop}")
+        self._emit_label(lbl_end)
+
+        self._free_if_temp(r_b)
+        return r_a  # el residuo queda en r_a
 
 
     # Para UnaryOp, manejamos operadores unarios como negación, NOT lógico y NOT a nivel de bits.

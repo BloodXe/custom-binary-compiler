@@ -1,4 +1,0 @@
-
-func suma (a : int, b : int) :: int {
-    retorna a + b'
-}
