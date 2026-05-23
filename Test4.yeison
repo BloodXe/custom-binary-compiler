@@ -1,0 +1,36 @@
+# Array global para guardar los divisores encontrados
+var divisores : int = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]'  # maximo 11 divisores
+var cant_divisores : int = 0'
+
+# Calcula n % d usando restas repetidas
+func modulo(n : int, d : int) :: int {
+    mientras (n >= d) {
+        n = n - d'
+    }
+    retorna n'
+}
+
+# Retorna d si d es divisor de n, sino 0
+func divisor(n : int, d : int) :: int {
+    var mod : int = 0'
+    mod = modulo(n, d)'
+    si (mod == 0) {
+        retorna d'
+    }
+    retorna 0'
+}
+
+func main() :: void {
+    var numero : int = 10'
+    var i : int = 1'
+    var resultado : int = 0'
+
+    mientras (i <= numero) {
+        resultado = divisor(numero, i)'
+        si (resultado > 0) {
+            divisores[cant_divisores] = resultado'
+            cant_divisores = cant_divisores + 1'
+        }
+        i = i + 1'
+    }
+}

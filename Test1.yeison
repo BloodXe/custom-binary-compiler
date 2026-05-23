@@ -1,0 +1,67 @@
+# Variable global que almacena el resultado de la suma de primos
+var resultado : int = 0'
+
+# Funcion auxiliar que calcula n % divisor usando restas repetidas
+# Parametros: n = dividendo, divisor = divisor
+# Retorna: el residuo de n / divisor
+func modulo(n : int, divisor : int) :: int {
+    # Restamos el divisor de n hasta que n < divisor
+    mientras (n >= divisor) {
+        n = n - divisor'
+    }
+    retorna n'
+}
+
+# Funcion que determina si un numero es primo usando division por prueba iterativa
+# Parametros: n = numero a evaluar
+# Retorna: 2 si es primo, 0 si no es primo
+func es_primo(n : int) :: int {
+    var divisor : int = 2'
+    var es : int = 1'
+    var dd : int = 0'      
+    var mod : int = 0'     
+
+    si (n <= 1) {
+        es = 0'
+    }
+
+    mientras (es == 1) {
+        dd = divisor * divisor'
+        si (dd > n) {
+            es = 2'
+        } sino {
+            mod = modulo(n, divisor)'
+            si (mod == 0) {
+                es = 0'
+            } sino {
+                divisor = divisor + 1'
+            }
+        }
+    }
+    retorna es'
+}
+
+# Funcion que suma todos los numeros primos de una lista 
+# Retorna: la suma de los primos encontrados en la lista
+func sume() :: int {
+    var lista : int = [6,13,17]'
+    var i : int = 0'
+    var suma : int = 0'
+    var val : int = 0'     
+    var primo : int = 0'   
+
+    mientras (i < 10) {
+        val = lista[i]'
+        primo = es_primo(val)'
+        si (primo == 2) {
+            suma = suma + val'
+        }
+        i = i + 1'
+    }
+    retorna suma'
+}
+
+# Funcion principal: llama a sume y guarda el resultado en la variable global
+func main() :: void {
+    resultado = sume()'
+}

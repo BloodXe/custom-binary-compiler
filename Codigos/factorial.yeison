@@ -20,6 +20,7 @@ func factorial(n : int):: int {
 func main()::void{
 
     var n : int = 5'
+    var n: int = 5'
 
     factorial(n)'
 

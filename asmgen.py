@@ -966,8 +966,7 @@ class AsmGen:
             # Para un array, evaluamos cada elemento y lo almacenamos contiguamente en memoria (dirección base, base+4, base+8, ...)
             for i, elem in enumerate(value_node.elements):
                 r = self.visit(elem) # Evaluar el elemento del array y obtener su valor en un registro
-                r_addr = self._alloc_reg() # Registro para la dirección del elemento actual (dirección base + offset)
-                self._emit(f"addi {r_addr}, r0, {(addr + i * WORD) * 4}")
+                r_addr = self.load_immediate((addr + i) * 4)
                 self._emit(f"store {r}, 0({r_addr})")
                 self._free_if_temp(r)
                 self._free_reg(r_addr)
