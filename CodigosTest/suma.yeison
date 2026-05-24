@@ -1,0 +1,7 @@
+var x : int = 0'
+func suma(a:int, b:int)::int{
+
+    x = a + b'
+    retorna x'
+
+}

@@ -53,7 +53,7 @@ def load_with_imports(file: str) -> str:
         f = os.path.abspath(f)
 
         if f in visited:
-            return ""          # evitar ciclos de import
+            return ""
         visited.add(f)
 
         if not os.path.exists(f):
@@ -63,6 +63,21 @@ def load_with_imports(file: str) -> str:
 
         with open(f, encoding='utf-8') as fh:
             code = fh.read()
+
+        # Primera pasada: recolectar todos los símbolos declarados en este módulo
+        symbols = set()
+        if prefix:
+            for l in code.splitlines():
+                ls2 = l.strip()
+                if ls2.startswith("func "):
+                    sym = ls2.split()[1].split("(")[0]
+                    symbols.add(sym)
+                elif ls2.startswith("var "):
+                    sym = ls2.split()[1]
+                    symbols.add(sym)
+                elif ls2.startswith("const "):
+                    sym = ls2.split()[1]
+                    symbols.add(sym)
 
         result = []
         for line in code.splitlines():
@@ -74,25 +89,21 @@ def load_with_imports(file: str) -> str:
                 if len(parts) < 2:
                     result.append(line)
                     continue
-                # Quitar el terminador ' si está pegado al nombre
                 module = parts[1].replace("'", "").strip()
                 module_path = os.path.join(base_dir, module + ".yeison")
-                # Procesar el módulo importado con su prefijo
                 result.append(_load(module_path, prefix=module))
             else:
-                # Renombrar símbolos globales del módulo con su prefijo
+                # Renombrar referencias internas con el prefijo del módulo
                 if prefix:
-                    if ls.startswith("func "):
-                        line = line.replace("func ", f"func {prefix}.", 1)
-                    elif ls.startswith("var "):
-                        line = line.replace("var ", f"var {prefix}.", 1)
-                    elif ls.startswith("const "):
-                        line = line.replace("const ", f"const {prefix}.", 1)
+                    import re
+                    for sym in sorted(symbols, key=len, reverse=True):
+                        pattern = r'(?<!' + re.escape(prefix) + r'\.)\b' + re.escape(sym) + r'\b'
+                        line = re.sub(pattern, f'{prefix}.{sym}', line)
                 result.append(line)
 
         return "\n".join(result)
 
-    return _load(file)
+    return _load(file)  # ← llamada al final, dentro de load_with_imports
 
 
 # Pipeline de compilación: fases 1 a 3 (léxico, sintáctico, semántico)

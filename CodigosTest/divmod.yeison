@@ -1,13 +1,10 @@
+var x : int = 20'
+var y : int = 10'
+
+var division : int = 0'
+var modulo : int = 0'
+
 func main ()::void{
-
-    var x : int = 10'
-    var y : int = 5'
-
-    var division : int = 0'
-    var modulo : int = 0'
-
     division = x / y'
     modulo = x % 2'
-
-
 }

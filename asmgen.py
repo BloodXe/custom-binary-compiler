@@ -368,7 +368,7 @@ class AsmGen:
         sym = self.semantic.symbol_table.lookup(name)
         addr = sym.address if sym else 0
         r_addr = self.load_immediate(addr * 4)
-        r      = self._alloc_reg()
+        r = self._alloc_reg()
         self._emit(f"load {r}, 0({r_addr})")
         self._free_reg(r_addr)
         return r
@@ -395,32 +395,22 @@ class AsmGen:
             self._free_reg(r_addr4)
             return r_val
         
-        # Para otros casos de a arreglos, resolvemos la dirección base del arreglo (puede ser global o local) y luego calculamos la dirección del elemento con el índice
+        # Para otros casos de arreglos, calculamos base + index*4
+        # Reutilizamos registros para no agotar el pool
         r_base  = self._resolve_array_base(node.target)
         r_index = self.visit(node.indices[0])
-        
 
-        # Calcular offset = index * 4
-        r_shift = self._alloc_reg()
-        self._emit(f"addi {r_shift}, r0, 2")
-        
-        r_offset = self._alloc_reg()
-        self._emit(f"sll {r_offset}, {r_index}, {r_shift}")
-        self._free_reg(r_shift)      
-        self._free_if_temp(r_index)  
+        # r_index = index * 4, usando r3 como constante (no temporal)
+        self._emit(f"addi r3, r0, 2")
+        self._emit(f"sll {r_index}, {r_index}, r3")
 
-        # addr = base + offset
-        r_addr = self._alloc_reg()
-        self._emit(f"add {r_addr}, {r_base}, {r_offset}")
-        self._free_reg(r_offset)     
-        self._free_if_temp(r_base)  
+        # r_base = base + offset
+        self._emit(f"add {r_base}, {r_base}, {r_index}")
+        self._free_if_temp(r_index)
 
-        # Cargar valor
-        r_value = self._alloc_reg()
-        self._emit(f"load {r_value}, 0({r_addr})")
-        self._free_reg(r_addr)       
-
-        return r_value
+        # Cargar valor reutilizando r_base
+        self._emit(f"load {r_base}, 0({r_base})")
+        return r_base
 
     # Helper para resolver la dirección base de un arreglo, manejando tanto variables globales como locales, y accesos anidados (matrix[i][j])
     def _resolve_array_base(self, node) -> str:

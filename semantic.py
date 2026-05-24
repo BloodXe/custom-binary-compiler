@@ -32,7 +32,8 @@ from ast_nodes import *
 #direcciones de memoria
 DATA_BASE  = 0x0100
 STACK_BASE = 0xFFFC
-WORD = 4
+WORD = 1
+
 
 #funciones de la boveda que solo se pueden llamar en @boveda
 VAULT_API = {'login', 'logout', 'setpwd', 'authchk', 'authorize', 'vkload', 'vkinv'}
@@ -202,7 +203,7 @@ class SemanticAnalyzer:
         
         self.data_ptr = align(self.data_ptr)
         addr = self.data_ptr
-        self.data_ptr += size
+        self.data_ptr += size 
         return addr
     
     #igual que global pero con offset relativo al frame pointer
