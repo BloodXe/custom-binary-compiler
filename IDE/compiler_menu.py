@@ -1,4 +1,9 @@
 from tkinter import Menu, END
+import re
+
+# Función principal del backend del compilador.
+# Se encarga de ejecutar las fases del compilador y devolver
+# el resultado al IDE.
 from IDE.compiler_logic import compile_source
 
 
@@ -6,18 +11,25 @@ class CompilerMenu:
     def __init__(self, text, console):
         self.text = text
         self.console = console
-
+    
+    # Escribe texto en la consola del IDE.
     def write_console(self, message):
         self.console.delete("1.0", END)
         self.console.insert("1.0", message)
 
+    # Se ejecuta cuando se presiona el botón "Compile" o F5.
     def compile_code(self):
+        
+        # Obtiene todo el texto escrito en el editor.
         code = self.text.get("1.0", END)
-
+        
+        # Ejecuta el compilador usando el código fuente obtenido del editor.
         result = compile_source(code)
 
+        # Limpia cualquier error visual anterior antes de recompilar.
         self.clear_errors()
 
+        # Cuando la compilación es exitosa
         if result["success"]:
             output = "Compilación exitosa.\n\n"
 
@@ -29,23 +41,53 @@ class CompilerMenu:
                 output += "=== ASM RESUELTO ===\n\n"
                 output += result["resolved_asm"]
 
+            # Escribe el resultado en la consola
             self.write_console(output)
 
+            # Cuando se generan errores de compilación
+
         else:
+            # Limpia cualquier error visual anterior antes de recompilar.
+            message = result.get("message", "")
+
+            # Mostrar el error en la consola del IDE.
             self.write_console(
                 f"Error de compilación\n"
                 f"Fase: {result.get('phase', 'desconocida')}\n\n"
-                f"{result.get('message', '')}"
+                f"{message}"
             )
 
-            self.mark_error_line(1, result.get("message", ""))
+            # Buscar automáticamente el número de línea dentro del mensaje.
+            match = re.search(r"[Ll][íi]nea\s*(\d+)", message)
 
+            # Si se encontró una línea válida, la marca visualmente.
+            if match:
+                line = int(match.group(1))
+                self.mark_error_line(line, message)
 
-    def mark_error_line(self, line, message):
+            # Si no se pudo detectar la línea, marcar la primera línea por defecto.
+            else:
+                self.mark_error_line(1, message)
+
+    # Marca visualmente una línea con error dentro del editor.
+    def mark_error_line(self, line, message=""):
+        self.clear_errors()
+
+        # Índices de inicio y fin de la línea en el widget Text.
         start = f"{line}.0"
         end = f"{line}.end"
+
         self.text.tag_add("error", start, end)
-        self.text.tag_config("error", background="#5A1E1E", underline=True)
+
+        self.text.tag_configure(
+            "error",
+            background="#5A1E1E",
+            foreground="#FF6B6B",
+            underline=True
+        )
+
+        self.text.tag_raise("error")
+        self.text.see(start)
 
     def clear_errors(self):
         self.text.tag_remove("error", "1.0", END)
