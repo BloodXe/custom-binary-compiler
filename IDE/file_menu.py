@@ -12,7 +12,7 @@ class File:
 
     def newFile(self):
         self.filename = None
-        self.root.title("TextEditor - Untitled")
+        self.root.title("TEA-ISA IDE - Untitled")
         self.text.delete("1.0", END)
 
     def saveFile(self):
@@ -22,25 +22,42 @@ class File:
 
         try:
             with open(self.filename, "w", encoding="utf-8") as f:
-                f.write(self.text.get("1.0", END))
+                f.write(self.text.get("1.0", END).rstrip())
         except Exception:
             showerror(title="Oops!", message="Unable to save file...")
 
     def saveAs(self):
-        f = asksaveasfile(mode="w", defaultextension=".txt", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        f = asksaveasfile(
+            mode="w",
+            defaultextension=".yeison",
+            filetypes=[
+                ("Yeison source files", "*.yeison"),
+                ("All files", "*.*")
+            ]
+        )
+
         if f is None:
             return
 
         try:
             with f:
                 f.write(self.text.get("1.0", END).rstrip())
+
             self.filename = f.name
-            self.root.title(f"TextEditor - {self.filename}")
+            self.root.title(f"TEA-ISA IDE - {self.filename}")
+
         except Exception:
             showerror(title="Oops!", message="Unable to save file...")
 
     def openFile(self):
-        f = askopenfile(mode="r", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        f = askopenfile(
+            mode="r",
+            filetypes=[
+                ("Yeison source files", "*.yeison"),
+                ("All files", "*.*")
+            ]
+        )
+
         if f is None:
             return
 
@@ -48,9 +65,11 @@ class File:
             with f:
                 self.filename = f.name
                 content = f.read()
+
             self.text.delete("1.0", END)
             self.text.insert("1.0", content)
-            self.root.title(f"TextEditor - {self.filename}")
+            self.root.title(f"TEA-ISA IDE - {self.filename}")
+
         except Exception:
             showerror(title="Oops!", message="Unable to open file...")
 
@@ -68,7 +87,7 @@ def main(root, text, menubar):
         activebackground="#000000",
         activeforeground="white"
     )
-    
+
     objFile = File(text, root)
 
     filemenu.add_command(label="New", command=objFile.newFile)
