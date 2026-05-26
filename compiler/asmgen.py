@@ -3,7 +3,7 @@
 
 from platform import node
 import sys
-from ast_nodes import (
+from compiler.ast_nodes import (
     Program, SectionBlock, FunctionDeclaration, VarDeclaration, ConstDeclaration,
     Assignment, ExpressionStatement, IfStatement, WhileStatement, ForStatement,
     ReturnStatement, ImportStatement,
@@ -485,7 +485,7 @@ class AsmGen:
 
     def _contains_call(self, node) -> bool:
         """Retorna True si el nodo o alguno de sus descendientes es una FunctionCall."""
-        from ast_nodes import FunctionCall
+        from compiler.ast_nodes import FunctionCall
         if isinstance(node, FunctionCall):
             return True
         for child in getattr(node, 'children', []):
@@ -604,7 +604,7 @@ class AsmGen:
 
     # Funcion de multiplicación: se emite como un loop de suma repetida (res = 0; while b != 0: res += a; b--)
     def _emit_mul(self, node) -> str:
-        from ast_nodes import FunctionCall as FC
+        from compiler.ast_nodes import FunctionCall as FC
 
         r_a = self.visit(node.left)
 
@@ -1204,7 +1204,7 @@ class AsmGen:
 
        # Pre-registrar la variable de control como local si no existe
         if isinstance(node.init, Assignment):
-           from ast_nodes import Identifier as _Id
+           from compiler.ast_nodes import Identifier as _Id
            target = node.init.target
            if isinstance(target, _Id):
                 var_name = target.name

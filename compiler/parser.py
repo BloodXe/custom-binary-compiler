@@ -1,7 +1,7 @@
 # Análisis sintáctico 
 from typing import List
-from lexer import Token, TokenType
-from ast_nodes import (
+from compiler.lexer import Token, TokenType
+from compiler.ast_nodes import (
     Program, TypeNode, Identifier, IndexAccess,
     IntLiteral, RealLiteral, BoolLiteral, StringLiteral, HexLiteral, ListLiteral,
     BinaryOp, UnaryOp, FunctionCall,VarDeclaration, ConstDeclaration, Assignment, ExpressionStatement, FunctionDeclaration,

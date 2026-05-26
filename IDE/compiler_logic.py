@@ -1,23 +1,61 @@
-import sys
 import os
+import sys
 
-from lexer      import Lexer
-from parser     import Parser, ParseError
-from ast_nodes  import AstNode
-from semantic   import SemanticAnalyzer
-from asmgen     import AsmGen
-from resolver   import Resolver
-from binary_gen import BinaryGen
-from lexer     import Lexer
-from parser    import Parser, ParseError
-from ast_nodes import AstNode, FunctionDeclaration
-from semantic  import SemanticAnalyzer
-from asmgen import AsmGen
-from resolver import Resolver
+from compiler.lexer      import Lexer
+from compiler.parser     import Parser, ParseError
+from compiler.ast_nodes  import AstNode
+from compiler.semantic   import SemanticAnalyzer
+from compiler.asmgen     import AsmGen
+from compiler.resolver   import Resolver
+from compiler.binary_gen import BinaryGen
 
+
+# Esta funcion hace que el compilador pueda leer texto directo del IDE
+# Sin necesidad de ejecutar el compilador por consola
+def compile_source(source: str):
+
+    # Se crea un objeto similar a los argumentos de argparse
+    # Esto para adaptar lo que teníamos antes con el IDE
+    class Args:
+        lexer = True
+        verbose = True
+        semantico = True
+        memoria = False
+        etiquetas = True
+        asm = True
+        binario = False
+        hex = False
+        output = None
+        from_asm = False
+
+    args = Args()
+
+    try:
+        ast, sem = run_phases_1_to_3(source, args)
+
+        gen = AsmGen(sem)
+        asm_code = gen.generate(ast)
+
+        resolver = Resolver(asm_code)
+        resolved_asm = resolver.resolve()
+
+        return {
+            "success": True,
+            "phase": "success",
+            "ast": ast,
+            "asm": asm_code,
+            "resolved_asm": resolved_asm,
+            "message": "Compilación exitosa"
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "phase": "error",
+            "message": str(e)
+        }    
 
 # Impresión del AST
-
 def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
     """Imprime el AST con formato de árbol usando ramas."""
     connector    = '└── ' if last else '├── '
@@ -111,48 +149,61 @@ def load_with_imports(file: str) -> str:
 def run_phases_1_to_3(source: str, args):
     """
     Ejecuta léxico, sintáctico y semántico.
-    Retorna (ast, sem) o llama sys.exit() si hay errores.
+    Retorna (ast, sem).
+    Lanza excepciones si hay errores.
     """
-    # Fase 1: Análisis léxico
-    lexer  = Lexer(source)
+
+    # ───────── FASE 1: LÉXICO ─────────
+
+    lexer = Lexer(source)
     tokens = lexer.tokenize()
 
     if args.lexer:
         lexer.print_tokens(tokens)
 
     if lexer.errors:
-        print(f'\nErrores léxicos ({len(lexer.errors)}):')
-        for ln, col, msg in lexer.errors:
-            print(f'  Línea {ln}, col {col}: {msg}')
-        sys.exit(1)
 
-    # Fase 2: Análisis sintáctico
+        error_msg = f'\nErrores léxicos ({len(lexer.errors)}):\n'
+
+        for ln, col, msg in lexer.errors:
+            error_msg += f'  Línea {ln}, col {col}: {msg}\n'
+
+        raise Exception(error_msg)
+
+    # ───────── FASE 2: SINTÁCTICO ─────────
+
     try:
         ast = Parser(tokens).parse()
+
     except ParseError as e:
-        print(f'Error sintáctico: {e}')
-        sys.exit(1)
+        raise Exception(f'Error sintáctico:\n{e}')
 
     if args.verbose:
         print('\n=== ÁRBOL SINTÁCTICO ===\n')
         print_ast(ast)
 
-    # Fase 3: Análisis semántico
+    # ───────── FASE 3: SEMÁNTICO ─────────
+
     sem = SemanticAnalyzer()
     sem.visit(ast)
 
     if args.semantico:
         sem.symbol_table.print_table()
+
     if args.etiquetas:
         sem.print_labels()
+
     if args.memoria:
         sem.print_memory()
 
     if sem.errors:
-        print(f'\nErrores semánticos ({len(sem.errors)}):')
+
+        error_msg = f'\nErrores semánticos ({len(sem.errors)}):\n'
+
         for e in sem.errors:
-            print(f'  {e}')
-        sys.exit(1)
+            error_msg += f'  {e}\n'
+
+        raise Exception(error_msg)
 
     return ast, sem
 

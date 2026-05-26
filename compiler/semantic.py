@@ -25,9 +25,9 @@ RS-10: Funciones de bóveda: Algunas funciones especiales solo se pueden usar de
 """
 
 import sys
-from lexer import Lexer
-from parser import Parser, ParseError
-from ast_nodes import *
+from compiler.lexer import Lexer
+from compiler.parser import Parser, ParseError
+from compiler.ast_nodes import *
 
 #direcciones de memoria
 DATA_BASE  = 0x0100
