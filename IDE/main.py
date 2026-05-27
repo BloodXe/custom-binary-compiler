@@ -14,6 +14,7 @@ import IDE.file_menu as file_menu
 import IDE.edit_menu as edit_menu
 import IDE.help_menu as help_menu
 import IDE.compiler_menu as compiler_menu
+import IDE.autocomplete as autocomplete
 
 root = Tk()
 root.title("TEA-ISA IDE - Untitled")
@@ -72,5 +73,6 @@ file_menu.main(root, text, menubar)
 edit_menu.main(root, text, menubar)
 help_menu.main(root, text, menubar)
 compiler_menu.main(root, text, console, menubar)
+autocomplete.setup(root, text)
 
 root.mainloop()
