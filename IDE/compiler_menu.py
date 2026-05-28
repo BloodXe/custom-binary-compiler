@@ -5,6 +5,7 @@ import re
 # Se encarga de ejecutar las fases del compilador y devolver
 # el resultado al IDE.
 from IDE.compiler_logic import compile_source
+from IDE.autofix import autofix
 
 
 class CompilerMenu:
@@ -16,6 +17,49 @@ class CompilerMenu:
     def write_console(self, message):
         self.console.delete("1.0", END)
         self.console.insert("1.0", message)
+
+    # Autofix
+    def fix_code(self):
+        """Aplica autofix al código en el editor y reporta los cambios."""
+        code = self.text.get("1.0", END)
+
+        fix = autofix(code)
+
+        if not fix["changed"]:
+            self.write_console("✔ No se encontraron errores que corregir automáticamente.")
+            return
+
+        # Reemplazar el contenido del editor con el código corregido
+        self.text.delete("1.0", END)
+        self.text.insert("1.0", fix["fixed_source"])
+
+        # Marcar visualmente las líneas que recibieron un terminador
+        self.clear_errors()
+        for ln in fix["term_lines"]:
+            self._mark_fixed_line(ln)
+        for ln in fix["paren_lines"]:
+            self._mark_fixed_line(ln)
+
+        self.write_console(
+            "✔ Corrección automática aplicada:\n\n" + fix["summary"]
+        )
+
+    def _mark_fixed_line(self, line: int):
+        """Resalta en verde la línea que fue corregida automáticamente."""
+        start = f"{line}.0"
+        end   = f"{line}.end"
+        self.text.tag_add("fixed", start, end)
+        self.text.tag_configure(
+            "fixed",
+            background="#1A3A1A",
+            foreground="#7EE787",
+        )
+        self.text.tag_raise("fixed")
+
+    def clear_fixed(self):
+        self.text.tag_remove("fixed", "1.0", END)
+
+    # Compilacion
 
     # Se ejecuta cuando se presiona el botón "Compile" o F5.
     def compile_code(self):
@@ -106,8 +150,13 @@ def main(root, text, console, menubar):
     )
 
     compiler_menu.add_command(label="Compile", command=obj.compile_code, accelerator="F5")
+    compiler_menu.add_command(label="Fix Code", command=obj.fix_code, accelerator ="Ctrl+F4")
+    compiler_menu.add_command(label="Fix & Compile", command=lambda: (obj.fix_code(), obj.compile_code()), accelerator="F6")        
+    compiler_menu.add_separator()                                                                                                    
     compiler_menu.add_command(label="Clear Errors", command=obj.clear_errors)
 
     menubar.add_cascade(label="Compiler", menu=compiler_menu)
     root.bind("<F5>", lambda event: obj.compile_code())
+    root.bind("<F4>", lambda event: obj.fix_code())                                    
+    root.bind("<F6>", lambda event: (obj.fix_code(), obj.compile_code()))              
     root.config(menu=menubar)
