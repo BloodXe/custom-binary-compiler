@@ -1,26 +1,23 @@
 import re
 
-# Autofix: corrección automática de errores comunes en el código fuente, como terminadores faltantes ( ' ), 
-# llaves sin cerrar ( { ) y paréntesis sin cerrar ( ( ).
 
-#  Patrones de líneas que nunca llevan terminador ( ' )
 
 # Encabezados de bloque: func, si, sino, mientras, para
 _BLOCK_HEADER = re.compile(
     r"""^
     (
-        func \s+ \w[\w.]* \s* \(.*          # func nombre(...)
-      | si   \s* \(.*                        # si (...)
-      | sino \s*                             # sino
-      | mientras \s* \(.*                   # mientras (...)
-      | para \s* \(.*                        # para (...)
+        func \s+ \w[\w.]* \s* \(.*        
+      | si   \s* \(.*                       
+      | sino \s*                           
+      | mientras \s* \(.*                  
+      | para \s* \(.*                       
     )
-    (\s* \{ \s* )?                           # { opcional al final
+    (\s* \{ \s* )?                          
     $""",
     re.VERBOSE,
 )
 
-# Líneas que son sólo una llave o un marcador de sección
+
 _STRUCTURAL = re.compile(r"^(\{|\}|@boveda|@code)\s*$")
 
 # Línea vacía o sólo comentario
@@ -93,13 +90,6 @@ def fix_terminators(source):
 #  Corrección de llaves sin cerrar
 
 def fix_braces(source):
-    """
-    Añade las llaves de cierre } que faltan al final del archivo.
-
-    Retorna:
-        fixed_source  - texto corregido
-        added         - cantidad de llaves añadidas (0 si no hubo cambios)
-    """
 
     # Contamos la profundidad de llaves en el código, ignorando las que estén dentro de strings.
     depth = 0
@@ -128,14 +118,7 @@ def fix_braces(source):
 #  Corrección de paréntesis sin cerrar (dentro de cada línea)
 
 def fix_parens(source):
-    """
-    Cierra paréntesis que abren en una línea pero no cierran en esa misma línea
-    (caso típico: llamadas a función o encabezados de si/mientras incompletos).
 
-    Retorna:
-        fixed_source  - texto corregido
-        fixed_lines   - lista de líneas (1-indexed) modificadas
-    """
 
     # El proceso es línea por línea para evitar interferencias entre correcciones
     lines = source.splitlines()
@@ -150,10 +133,30 @@ def fix_parens(source):
         if _BLANK_OR_COMMENT.match(stripped):
             result.append(line)
             continue
-        
-        # Contamos los paréntesis abiertos y cerrados en la línea, ignorando los que estén dentro de strings
-        open_count  = line.count("(")
-        close_count = line.count(")")
+
+        if "{" in stripped:
+            idx_dc = line.find("::")
+            if idx_dc != -1:
+                before_dc = line[:idx_dc]
+                idx_open  = before_dc.rfind("(")
+                # solo corregimos si entre ( y :: no hay nada (paréntesis vacío mal cerrado)
+                if idx_open != -1 and before_dc[idx_open + 1:].strip() == "":
+                    line = line[:idx_dc] + ")" + line[idx_dc:]
+                    fixed_lines.append(i)
+            result.append(line)
+            continue
+
+        open_count = close_count = 0
+        in_string = False
+        for ch in line:
+            if ch == '"':
+                in_string = not in_string
+            if in_string:
+                continue
+            if ch == '(':
+                open_count += 1
+            elif ch == ')':
+                close_count += 1
         diff = open_count - close_count
 
         # Si hay más paréntesis abiertos que cerrados, añadimos los ) faltantes al final de la línea (antes de cualquier comentario inline)
@@ -184,29 +187,15 @@ def fix_parens(source):
 # Función principal de autofix que aplica todas las correcciones en orden y genera un resumen legible de los cambios realizados.
 
 def autofix(source):
-    """
-    Aplica todas las correcciones en orden:
-        1. Paréntesis sin cerrar (por línea)
-        2. Terminadores faltantes ( ' )
-        3. Llaves sin cerrar (al final del archivo)
-
-    Retorna un dict con:
-        fixed_source   - texto final corregido
-        changed        - True si se realizó algún cambio
-        summary        - string legible con el resumen de cambios
-        term_lines     - líneas donde se añadió '
-        paren_lines    - líneas donde se añadieron )
-        braces_added   - cantidad de } añadidas al final
-    """
     original = source
 
-    # 1 - paréntesis
+    # paréntesis
     source, paren_lines = fix_parens(source)
 
-    # 2 - terminadores
+    # terminadores
     source, term_lines = fix_terminators(source)
 
-    # 3 - llaves
+    # llaves
     source, braces_added = fix_braces(source)
 
     changed = source != original

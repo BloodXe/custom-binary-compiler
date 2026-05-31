@@ -374,10 +374,16 @@ text.bind("}", on_close_brace,   add="+")
 
 menubar = Menu(root)
 
-file_menu.main(root, text, menubar)
+# compiler_menu se inicializa primero para tener la referencia a clear_errors
+cm = compiler_menu.main(root, text, console, menubar)
+
+# file_menu recibe los callbacks para actualizar el IDE al abrir/crear archivos
+file_menu.main(root, text, menubar,
+               on_content_change=on_content_change,
+               clear_errors=cm.clear_errors)
+
 edit_menu.main(root, text, menubar)
 help_menu.main(root, text, menubar)
-compiler_menu.main(root, text, console, menubar)
 autocomplete.setup(root, text)
 
 root.config(menu=menubar)

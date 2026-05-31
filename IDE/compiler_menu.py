@@ -1,187 +1,215 @@
-#menu del compilador con deteccion de errores en tiempo real
+# menu del compilador con deteccion de errores en tiempo real
 
 
-import re
 import sys
 import os
 from tkinter import Menu, END
+from tkinter.filedialog import asksaveasfilename
+from tkinter.messagebox import showerror
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from IDE.compiler_logic import compile_source, run_live_check
-
+from IDE.autofix import autofix
 
 
 _STYLES = {
-    "lex":      {"background": "#4D2600", "foreground": "#FFA657", "underline": True},  
-    "parse":    {"background": "#5A1E1E", "foreground": "#FF6B6B", "underline": True}, 
-    "semantic": {"background": "#3D3800", "foreground": "#E3B341", "underline": True},  
+    "lex":      {"background": "#4D2600", "foreground": "#FFA657", "underline": True},
+    "parse":    {"background": "#5A1E1E", "foreground": "#FF6B6B", "underline": True},
+    "semantic": {"background": "#3D3800", "foreground": "#E3B341", "underline": True},
     "codegen":  {"background": "#5A1E1E", "foreground": "#FF6B6B", "underline": True},
     "error":    {"background": "#5A1E1E", "foreground": "#FF6B6B", "underline": True},
-    "autofix":  {"background": "#1F2D3D", "foreground": "#79C0FF", "underline": True},  
+    "autofix":  {"background": "#1F2D3D", "foreground": "#79C0FF", "underline": True},
 }
 
-_ERR_PREFIX = "cmperr_"
-
-#busca problemas que se pueden corregir automaticamente terminadores faltantes y llaves/parentesis sin cerrar
-def _find_autofix_issues(source: str) -> list:
-
-    try:
-        from compiler.lexer import Lexer, TokenType
-    except ImportError:
-        return []
-
-    issues = []
-    NEEDS_TERM = re.compile(
-        r"^\s*(var\s|const\s|retorna\b|[A-Za-z_]\w*(\s*\[.*?\])?\s*=(?!=))"
-    )
-    NO_TERM_END = {"'", "{", "}", "(", ")", ",", "\\"}
-
-    #revisa cada linea buscando terminadores faltantes
-    for i, raw in enumerate(source.split("\n"), start=1):
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped[-1] in NO_TERM_END:
-            continue
-        if NEEDS_TERM.match(stripped):
-            issues.append({
-                "kind": "missing_terminator",
-                "line": i, "col": len(raw.rstrip()) + 1,
-                "msg":  f"Línea {i}: falta terminador (') al final",
-                "fix":  "'",
-            })
-
-    #uso del lexer para detectar llaves y parentesis sin cerrar
-    try:
-        toks   = Lexer(source).tokenize()
-        braces = []
-        parens = []
-        for tok in toks:
-            n = tok.type.name
-            if   n == "LBRACE":  braces.append((tok.line, tok.col))
-            elif n == "RBRACE":
-                if braces: braces.pop()
-                else: issues.append({"kind": "unbalanced_brace", "line": tok.line, "col": tok.col,
-                                     "msg": f"Línea {tok.line}, col {tok.col}: '}}' sin apertura", "fix": None})
-            elif n == "LPAREN":  parens.append((tok.line, tok.col))
-            elif n == "RPAREN":
-                if parens: parens.pop()
-                else: issues.append({"kind": "unbalanced_paren", "line": tok.line, "col": tok.col,
-                                     "msg": f"Línea {tok.line}, col {tok.col}: ')' sin apertura", "fix": None})
-        for ln, col in braces:
-            issues.append({"kind": "unbalanced_brace", "line": ln, "col": col,
-                           "msg": f"Línea {ln}, col {col}: '{{' sin cierre", "fix": None})
-        for ln, col in parens:
-            issues.append({"kind": "unbalanced_paren", "line": ln, "col": col,
-                           "msg": f"Línea {ln}, col {col}: '(' sin cierre", "fix": None})
-    except Exception:
-        pass
-
-    return issues
+_ERR_PREFIX    = "cmperr_"
+_DEBOUNCE_MS   = 300   # ms de espera antes de correr el pipeline en live_check
+_PHASE_LABELS  = {
+    "lex":      "Léxico",
+    "parse":    "Sintáctico",
+    "semantic": "Semántico",
+    "codegen":  "Generación de código",
+}
 
 
 class CompilerMenu:
 
     def __init__(self, text, console):
-        self.text      = text
-        self.console   = console
-        self._err_tags = []  #guardo los tags de error activos para poder borrarlos
+        self.text       = text
+        self.console    = console
+        self._err_tags  = []      # tags de error activos en el editor
+        self._mode      = "ready" # ready | live | compile | autofix
+        self._debounce  = None    # id del after() pendiente para live_check
+
+
 
     def _write(self, msg: str):
-        #limpio la consola y escribo el nuevo mensaje
-        self.console.config(state="normal")
+        # reemplaza todo el contenido de la consola con el mensaje nuevo
         self.console.delete("1.0", END)
         self.console.insert("1.0", msg)
 
+    def _clear_console(self):
+        # deja la consola en blanco
+        self.console.delete("1.0", END)
+
+
+
+    # "Compilar" o F5
     def compile_code(self):
-        #compilo el codigo del editor y muestro el resultado
+        self._cancel_debounce()
         source = self.text.get("1.0", END)
         self.clear_errors()
         result = compile_source(source)
+        self._mode = "compile"
 
         if result["success"]:
             out = "Compilación exitosa.\n\n"
             if result.get("asm"):
-                out += " ASM GENERADO\n\n" + result["asm"] + "\n\n"
+                out += "=== ASM GENERADO ===\n\n" + result["asm"] + "\n\n"
             if result.get("resolved_asm"):
-                out += "ASM RESUELTO \n\n" + result["resolved_asm"]
+                out += "=== ASM RESUELTO ===\n\n" + result["resolved_asm"]
             self._write(out)
         else:
             errors = result.get("errors", [])
             phase  = result.get("phase", "error")
             self._mark_errors(errors)
-
-            #nombre legible de la fase que fallo
-            label = {"lex": "léxico", "parse": "sintáctico", "semantic": "semántico",
-                     "codegen": "generación de código"}.get(phase, "compilación")
+            label  = _PHASE_LABELS.get(phase, "compilación")
             header = f"Error {label}  —  {len(errors)} error(es) detectado(s)\n{'─'*50}\n\n"
             self._write(header + result.get("message", ""))
 
-    def autofix_code(self):
-        #intenta corregir automaticamente los problemas q
-        source = self.text.get("1.0", END)
-        issues = _find_autofix_issues(source)
-        self.clear_errors()
 
-        if not issues:
-            self._write("No se encontraron problemas autocorregibles")
+
+    # compila el codigo y genera un archivo .mem
+    def compile_to_mem(self):
+        self._cancel_debounce()
+        source = self.text.get("1.0", END)
+        self.clear_errors()
+        result = compile_source(source)
+        self._mode = "compile"
+
+        if not result["success"]:
+            errors = result.get("errors", [])
+            phase  = result.get("phase", "error")
+            self._mark_errors(errors)
+            label  = _PHASE_LABELS.get(phase, "compilación")
+            header = f"Error {label}  —  {len(errors)} error(es) detectado(s)\n{'─'*50}\n\n"
+            self._write(header + result.get("message", ""))
             return
 
-        fixed    = []  # lineas donde agregue terminador
-        warnings = []  # problemas que no puedo corregir automaticamente
-        entries  = []
-        for iss in issues:
-            entries.append({"line": iss["line"], "col": iss["col"],
-                            "msg": iss["msg"], "phase": "autofix"})
-            if iss["kind"] == "missing_terminator" and iss.get("fix"):
-                fixed.append(iss["line"])
-            else:
-                warnings.append(iss["msg"])
+        # si la compilacion fue exitosa, pedimos donde guardar el .mem
+        mem_path = asksaveasfilename(
+            title="Guardar archivo .mem",
+            defaultextension=".mem",
+            filetypes=[("MEM files", "*.mem"), ("All files", "*.*")],
+        )
+        if not mem_path:
+            # el usuario canceló el dialogo; volvemos a modo listo
+            self._mode = "ready"
+            return
 
+        try:
+            from compiler.binary_gen import BinaryGen
+
+            bin_path = os.path.splitext(mem_path)[0] + ".bin"
+            resolved = result.get("resolved_asm", "")
+
+            bg = BinaryGen(resolved)
+            ok = bg.generate(bin_path, mem_path)
+
+            if ok:
+                self._write(
+                    f"Compilación a .mem exitosa.\n\n"
+                    f"Binario : {bin_path}\n"
+                    f"Mem     : {mem_path}\n\n"
+                    f"=== ASM RESUELTO ===\n\n{resolved}"
+                )
+            else:
+                errs = "\n".join(f"  • {e}" for e in bg.errors)
+                self._write(f"Error en generación binaria:\n{'─'*50}\n\n{errs}")
+        except Exception as exc:
+            showerror("Error generando .mem", str(exc))
+
+ 
+
+    # aplica autofix al codigo del editor usando autofix.py y reporta los cambios
+    def autofix_code(self):
+        self._cancel_debounce()
+        source = self.text.get("1.0", END)
+        self.clear_errors()
+        self._mode = "autofix"
+
+        fix = autofix(source)
+
+        if not fix["changed"]:
+            self._write("No se encontraron errores que corregir automáticamente.")
+            return
+
+        # reemplaza el contenido del editor con el codigo corregido
+        self.text.delete("1.0", END)
+        self.text.insert("1.0", fix["fixed_source"])
+
+        # resalta visualmente las lineas que recibieron alguna correccion
+        fixed_lines = set(fix["term_lines"]) | set(fix["paren_lines"])
+        entries = [{"line": ln, "col": 1, "phase": "autofix"} for ln in fixed_lines]
         self._mark_errors(entries)
 
-        # agrego los terminadores faltantes (de abajo hacia arriba para no desplazar lineas)
-        for ln in sorted(fixed, reverse=True):
-            end_pos  = self.text.index(f"{ln}.end")
-            line_txt = self.text.get(f"{ln}.0", end_pos)
-            if not line_txt.rstrip().endswith("'"):
-                self.text.insert(end_pos, "'")
+        self._write("Corrección automática aplicada:\n\n" + fix["summary"])
 
-        # armo el reporte de lo que se hizo
-        report = ""
-        if fixed:
-            report += f"✓ {len(fixed)} terminador(es) añadido(s) en líneas: " \
-                      + ", ".join(str(l) for l in sorted(fixed)) + "\n\n"
-        if warnings:
-            report += f"⚠ {len(warnings)} advertencia(s) — corrección manual requerida:\n"
-            for w in warnings:
-                report += f"  • {w}\n"
-        self._write(report)
+  
 
-    def live_check(self, event=None):
-        # revision en tiempo real al escribir (lexico + parser + semantico)
-        # si falla en alguna fase, para ahi para no saturar con errores
+    def schedule_live_check(self, event=None):
+        self._mode = "live"
+        self._cancel_debounce()
+        self._debounce = self.text.after(_DEBOUNCE_MS, self._run_live_check)
+
+    def _cancel_debounce(self):
+
+        if self._debounce is not None:
+            try:
+                self.text.after_cancel(self._debounce)
+            except Exception:
+                pass
+            self._debounce = None
+
+    def _run_live_check(self):
+
+        self._debounce = None
+
+        if self._mode != "live":
+            return
+
         self.clear_errors()
         try:
             source = self.text.get("1.0", END)
             errors = run_live_check(source)
+
             if errors:
                 self._mark_errors(errors)
-                # muestro solo el primer error en la consola
-                first = errors[0]
-                phase_label = {"lex": "Léxico", "parse": "Sintáctico",
-                               "semantic": "Semántico"}.get(first["phase"], "Error")
-                self._write(f"{phase_label}: {first['msg']}\n"
-                            + (f"  ({len(errors)-1} error(es) más...)" if len(errors) > 1 else ""))
+                self._write(self._format_live_errors(errors))
+            else:
+       
+                self._write("Sin errores")
+                self._mode = "ready"
         except Exception:
-            pass  # nunca rompo el editor por un error en la revision
+            pass  
+
+    def _format_live_errors(self, errors: list) -> str:
+
+        lines = [f"{len(errors)} error(es) detectado(s)\n{'─'*50}\n"]
+        for err in errors:
+            phase = _PHASE_LABELS.get(err.get("phase", ""), "Error")
+            ln    = err.get("line", "?")
+            col   = err.get("col",  "?")
+            msg   = err.get("msg",  "")
+            lines.append(f"[{phase}] Línea {ln}, col {col}: {msg}")
+        return "\n".join(lines)
+
+
 
     def _mark_errors(self, errors: list):
-        # pinto las lineas con error usando tags cmperr_*
-        # no toco los tags hl_* del highlighting de sintaxis
+
         for err in errors:
             ln    = err.get("line", 1)
             col   = err.get("col",  1)
@@ -216,24 +244,25 @@ class CompilerMenu:
         self._err_tags = []
 
 
-def main(root, text, console, menubar):
+def main(root, text, console, menubar, on_content_change=None, file_obj=None):
     obj = CompilerMenu(text, console)
 
-    # creo el menu del compilador
+
     m = Menu(menubar, tearoff=0, bg="#161B22", fg="white",
              activebackground="#000000", activeforeground="white")
-    m.add_command(label="Compilar",       command=obj.compile_code, accelerator="F5")
+    m.add_command(label="Compilar",         command=obj.compile_code,   accelerator="F5")
+    m.add_command(label="Compilar a .mem",  command=obj.compile_to_mem, accelerator="F7")
     m.add_separator()
-    m.add_command(label="Auto-corregir",  command=obj.autofix_code, accelerator="F6")
-    m.add_command(label="Limpiar marcas", command=obj.clear_errors)
+    m.add_command(label="Auto-corregir",    command=obj.autofix_code,   accelerator="F6")
+    m.add_command(label="Limpiar marcas",   command=obj.clear_errors)
     menubar.add_cascade(label="Compilador", menu=m)
 
     # atajos de teclado
     root.bind("<F5>", lambda e: obj.compile_code())
     root.bind("<F6>", lambda e: obj.autofix_code())
+    root.bind("<F7>", lambda e: obj.compile_to_mem())
     root.config(menu=menubar)
 
-    # revision en tiempo real al soltar una tecla
-    text.bind("<KeyRelease>", lambda e: obj.live_check(), add="+")
+    text.bind("<KeyRelease>", lambda e: obj.schedule_live_check(), add="+")
 
     return obj
