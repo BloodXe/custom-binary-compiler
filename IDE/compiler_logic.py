@@ -9,6 +9,8 @@ from compiler.semantic import SemanticAnalyzer
 from compiler.asmgen import AsmGen
 from compiler.resolver import Resolver
 from compiler.binary_gen import BinaryGen
+from compiler.IRGen import IRGen
+from compiler.basic_blocks import build_basic_blocks, format_blocks
 
 
 # Para extraer linea y columna de mensajes de error
@@ -51,13 +53,15 @@ def _resultado_error(fase, mensaje, errores=None):
     }
 
 #crea el diccionario de resultado cuando todo sale bien
-def _resultado_exito(asm_code, resolved_asm):
+def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None):
 
     return {
         "success": True,
         "phase": "success",
         "message": "Compilación exitosa",
         "errors": [],
+        "ir": ir_code,
+        "blocks": blocks_code,
         "asm": asm_code,
         "resolved_asm": resolved_asm
     }
@@ -110,13 +114,21 @@ def compile_source(source: str) -> dict:
             errores.append(_crear_error(e_str, "semantic", ln, col))
         return _resultado_error("semantic", mensaje, errores)
     
+    #FASE 3.5 - REPRESENTACION INTERMEDIA Y BLOQUES BASICOS
+    try:
+        ir_code = IRGen().generate(ast)
+        blocks = build_basic_blocks(ir_code)
+        blocks_code = format_blocks(blocks)
+    except Exception as e:
+        return _resultado_error("ir", str(e))
+    
     #FASE 4 y 5 GENERACION DE CODIGO 
     try:
         gen = AsmGen(sem)
         asm_code = gen.generate(ast)
         resolver = Resolver(asm_code)
         resolved_asm = resolver.resolve()
-        return _resultado_exito(asm_code, resolved_asm)
+        return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code)
     except Exception as e:
         return _resultado_error("codegen", str(e))
 

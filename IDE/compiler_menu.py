@@ -6,6 +6,7 @@ import os
 from tkinter import Menu, END
 from tkinter.filedialog import asksaveasfilename
 from tkinter.messagebox import showerror
+from unittest import result
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
@@ -66,6 +67,10 @@ class CompilerMenu:
 
         if result["success"]:
             out = "Compilación exitosa.\n\n"
+            if result.get("ir"):
+                out += "=== REPRESENTACIÓN INTERMEDIA ===\n\n" + result["ir"] + "\n\n"
+            if result.get("blocks"):
+                out += "=== BLOQUES BÁSICOS ===\n\n" + result["blocks"] + "\n\n"
             if result.get("asm"):
                 out += "=== ASM GENERADO ===\n\n" + result["asm"] + "\n\n"
             if result.get("resolved_asm"):
