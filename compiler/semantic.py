@@ -293,7 +293,6 @@ class SemanticAnalyzer:
                 self.error(f"RS-02: el parametro '{pname}' esta duplicado en '{n.name}'", n)
 
         for stmt in n.body:
-            print(f"DEBUG sem: {type(stmt).__name__}") 
             self.visit(stmt)
 
         self.symbol_table.close_scope()

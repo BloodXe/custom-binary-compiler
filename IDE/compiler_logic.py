@@ -1,64 +1,186 @@
 import os
 import sys
+import re
 
-from compiler.lexer      import Lexer
-from compiler.parser     import Parser, ParseError
-from compiler.ast_nodes  import AstNode
-from compiler.semantic   import SemanticAnalyzer
-from compiler.asmgen     import AsmGen
-from compiler.resolver   import Resolver
+from compiler.lexer import Lexer
+from compiler.parser import Parser, ParseError
+from compiler.ast_nodes import AstNode
+from compiler.semantic import SemanticAnalyzer
+from compiler.asmgen import AsmGen
+from compiler.resolver import Resolver
 from compiler.binary_gen import BinaryGen
+from compiler.IRGen import IRGen
+from compiler.basic_blocks import build_basic_blocks, format_blocks
 
 
-# Esta funcion hace que el compilador pueda leer texto directo del IDE
-# Sin necesidad de ejecutar el compilador por consola
-def compile_source(source: str):
+# Para extraer linea y columna de mensajes de error
+_RE_LINECOL = re.compile(r'[Ll][íi]nea\s*(\d+)[,\s]+col(?:umna)?\s*(\d+)', re.IGNORECASE)
+_RE_LINE = re.compile(r'[Ll][íi]nea\s*(\d+)', re.IGNORECASE)
 
-    # Se crea un objeto similar a los argumentos de argparse
-    # Esto para adaptar lo que teníamos antes con el IDE
-    class Args:
-        lexer = True
-        verbose = True
-        semantico = True
-        memoria = False
-        etiquetas = True
-        asm = True
-        binario = False
-        hex = False
-        output = None
-        from_asm = False
 
-    args = Args()
+def _sacar_posicion(mensaje):
 
+    m = _RE_LINECOL.search(mensaje)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = _RE_LINE.search(mensaje)
+    if m:
+        return int(m.group(1)), 1
+    return 1, 1
+
+
+def _crear_error(mensaje, fase, linea=1, columna=1):
+  
+    return {
+        "line": linea, 
+        "col": columna, 
+        "msg": mensaje, 
+        "phase": fase
+    }
+
+#Crea el diccionario de resultado cuando hay error
+def _resultado_error(fase, mensaje, errores=None):
+    
+    if errores is None:
+        errores = [_crear_error(mensaje, fase)]
+    return {
+        "success": False,
+        "phase": fase,
+        "message": mensaje,
+        "errors": errores,
+        "asm": None,
+        "resolved_asm": None
+    }
+
+#crea el diccionario de resultado cuando todo sale bien
+def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None):
+
+    return {
+        "success": True,
+        "phase": "success",
+        "message": "Compilación exitosa",
+        "errors": [],
+        "ir": ir_code,
+        "blocks": blocks_code,
+        "asm": asm_code,
+        "resolved_asm": resolved_asm
+    }
+
+#Compila codigo fuente y devuelve el resultado
+def compile_source(source: str) -> dict:
+
+    
+    #ASE 1 LEXICO
     try:
-        ast, sem = run_phases_1_to_3(source, args)
-
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
+    except Exception as e:
+        return _resultado_error("lex", str(e))
+    
+    # Si hay errores lexicos, los reportamos
+    if lexer.errors:
+        mensaje = f"Errores léxicos ({len(lexer.errors)}):\n"
+        errores = []
+        for ln, col, msg in lexer.errors:
+            mensaje += f"  Línea {ln}, col {col}: {msg}\n"
+            errores.append(_crear_error(msg, "lex", ln, col))
+        return _resultado_error("lex", mensaje, errores)
+    
+    #FASE 2 PARSE
+    try:
+        ast = Parser(tokens).parse()
+    except ParseError as e:
+        msg = str(e)
+        ln, col = _sacar_posicion(msg)
+        return _resultado_error("parse", msg, [_crear_error(msg, "parse", ln, col)])
+    except Exception as e:
+        return _resultado_error("parse", str(e))
+    
+    #FASE 3 SEMANTICO
+    try:
+        sem = SemanticAnalyzer()
+        sem.visit(ast)
+    except Exception as e:
+        return _resultado_error("semantic", str(e))
+    
+    # Si hay errores semanticos
+    if sem.errors:
+        mensaje = f"Errores semánticos ({len(sem.errors)}):\n"
+        errores = []
+        for e in sem.errors:
+            e_str = str(e)
+            ln, col = _sacar_posicion(e_str)
+            mensaje += f"  {e_str}\n"
+            errores.append(_crear_error(e_str, "semantic", ln, col))
+        return _resultado_error("semantic", mensaje, errores)
+    
+    #FASE 3.5 - REPRESENTACION INTERMEDIA Y BLOQUES BASICOS
+    try:
+        ir_code = IRGen().generate(ast)
+        blocks = build_basic_blocks(ir_code)
+        blocks_code = format_blocks(blocks)
+    except Exception as e:
+        return _resultado_error("ir", str(e))
+    
+    #FASE 4 y 5 GENERACION DE CODIGO 
+    try:
         gen = AsmGen(sem)
         asm_code = gen.generate(ast)
-
         resolver = Resolver(asm_code)
         resolved_asm = resolver.resolve()
-
-        return {
-            "success": True,
-            "phase": "success",
-            "ast": ast,
-            "asm": asm_code,
-            "resolved_asm": resolved_asm,
-            "message": "Compilación exitosa"
-        }
-
+        return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code)
     except Exception as e:
-        return {
-            "success": False,
-            "phase": "error",
-            "message": str(e)
-        }    
+        return _resultado_error("codegen", str(e))
 
-# Impresión del AST
-def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
-    """Imprime el AST con formato de árbol usando ramas."""
-    connector    = '└── ' if last else '├── '
+
+def run_live_check(source: str) -> list:
+    #revision rapida
+    
+    if not source.strip():
+        return []
+    
+    # Lexico
+    try:
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
+    except Exception:
+        return []
+    
+    if lexer.errors:
+        errores = []
+        for ln, col, msg in lexer.errors:
+            errores.append(_crear_error(msg, "lex", ln, col))
+        return errores
+    
+    # Parser
+    try:
+        ast = Parser(tokens).parse()
+    except ParseError as e:
+        msg = str(e)
+        ln, col = _sacar_posicion(msg)
+        return [_crear_error(msg, "parse", ln, col)]
+    except Exception:
+        return []
+    
+    # Semantico
+    try:
+        sem = SemanticAnalyzer()
+        sem.visit(ast)
+        errores = []
+        for e in sem.errors:
+            e_str = str(e)
+            ln, col = _sacar_posicion(e_str)
+            errores.append(_crear_error(e_str, "semantic", ln, col))
+        return errores
+    except Exception:
+        return []
+
+
+# === FUNCIONES AUXILIARES (para linea de comandos) ===
+
+def print_ast(node: AstNode, last: bool = True, prefix: str = ''):
+    """Imprime el arbol sintactico de forma bonita"""
+    connector = '└── ' if last else '├── '
     child_prefix = prefix + ('    ' if last else '│   ')
     print(prefix + connector + repr(node))
     children = [c for c in node.children if isinstance(c, AstNode)]
@@ -66,260 +188,182 @@ def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
         print_ast(child, last=(i == len(children) - 1), prefix=child_prefix)
 
 
-# Carga de archivos con resolución de imports
-
-def load_with_imports(file: str) -> str:
-    """
-    Carga el archivo principal y todos sus imports recursivamente.
-
-    Para cada módulo importado, renombra sus símbolos globales con
-    el prefijo del módulo:
-        func suma   →   func modulo.suma
-        var x       →   var modulo.x
-        const C     →   const modulo.C
-
-    Esto permite que en el archivo que importa se use:
-        modulo.suma(...)   o   modulo.x
-
-    El lexer reconoce "modulo.suma" como un solo token IDENTIFIER
-    porque soporta puntos en identificadores (ver lexer.py).
-    El semántico los registra con el nombre completo, sin cambios.
-    """
-    visited = set()
-
-    def _load(f: str, prefix: str = None) -> str:
+def cargar_con_imports(archivo: str) -> str:
+   #Carga un archivo y todos sus imports
+    visitados = set()
+    
+    def _cargar(f: str, prefijo: str = None) -> str:
         f = os.path.abspath(f)
-
-        if f in visited:
+        if f in visitados:
             return ""
-        visited.add(f)
-
+        visitados.add(f)
+        
         if not os.path.exists(f):
             raise FileNotFoundError(f"Módulo no encontrado: '{f}'")
-
+        
         base_dir = os.path.dirname(f)
-
         with open(f, encoding='utf-8') as fh:
-            code = fh.read()
-
-        # Primera pasada: recolectar todos los símbolos declarados en este módulo
-        symbols = set()
-        if prefix:
-            for l in code.splitlines():
-                ls2 = l.strip()
-                if ls2.startswith("func "):
-                    sym = ls2.split()[1].split("(")[0]
-                    symbols.add(sym)
-                elif ls2.startswith("var "):
-                    sym = ls2.split()[1]
-                    symbols.add(sym)
-                elif ls2.startswith("const "):
-                    sym = ls2.split()[1]
-                    symbols.add(sym)
-
-        result = []
-        for line in code.splitlines():
-            ls = line.strip()
-
-            # Detectar 'importar nombre'
+            codigo = fh.read()
+        
+        # Encontrar simbolos definidos en este modulo
+        simbolos = set()
+        if prefijo:
+            for linea in codigo.splitlines():
+                ls = linea.strip()
+                if ls.startswith("func "):
+                    simbolos.add(ls.split()[1].split("(")[0])
+                elif ls.startswith("var ") or ls.startswith("const "):
+                    simbolos.add(ls.split()[1])
+        
+        # Procesar imports y prefijos
+        resultado = []
+        for linea in codigo.splitlines():
+            ls = linea.strip()
             if ls.startswith("importar"):
-                parts = ls.split()
-                if len(parts) < 2:
-                    result.append(line)
-                    continue
-                module = parts[1].replace("'", "").strip()
-                module_path = os.path.join(base_dir, module + ".yeison")
-                result.append(_load(module_path, prefix=module))
+                partes = ls.split()
+                if len(partes) >= 2:
+                    modulo = partes[1].replace("'", "").strip()
+                    ruta_modulo = os.path.join(base_dir, modulo + ".yeison")
+                    resultado.append(_cargar(ruta_modulo, prefijo=modulo))
+                else:
+                    resultado.append(linea)
             else:
-                # Renombrar referencias internas con el prefijo del módulo
-                if prefix:
-                    import re
-                    for sym in sorted(symbols, key=len, reverse=True):
-                        pattern = r'(?<!' + re.escape(prefix) + r'\.)\b' + re.escape(sym) + r'\b'
-                        line = re.sub(pattern, f'{prefix}.{sym}', line)
-                result.append(line)
+                # Agregar prefijo a los simbolos si es necesario
+                if prefijo:
+                    for simbolo in sorted(simbolos, key=len, reverse=True):
+                        # Reemplazar solo palabras completas
+                        patron = r'(?<!\w)' + re.escape(simbolo) + r'(?!\w)'
+                        # Evitar reemplazar si ya tiene prefijo
+                        if prefijo + '.' + simbolo not in linea:
+                            linea = re.sub(patron, f'{prefijo}.{simbolo}', linea)
+                resultado.append(linea)
+        
+        return "\n".join(resultado)
+    
+    return _cargar(archivo)
 
-        return "\n".join(result)
 
-    return _load(file)  # ← llamada al final, dentro de load_with_imports
+def ejecutar_fases_1_a_3(source: str, args):
 
-
-# Pipeline de compilación: fases 1 a 3 (léxico, sintáctico, semántico)
-
-def run_phases_1_to_3(source: str, args):
-    """
-    Ejecuta léxico, sintáctico y semántico.
-    Retorna (ast, sem).
-    Lanza excepciones si hay errores.
-    """
-
-    # ───────── FASE 1: LÉXICO ─────────
-
+    
+    # Lexico
     lexer = Lexer(source)
     tokens = lexer.tokenize()
-
+    
     if args.lexer:
         lexer.print_tokens(tokens)
-
+    
     if lexer.errors:
-
-        error_msg = f'\nErrores léxicos ({len(lexer.errors)}):\n'
-
-        for ln, col, msg in lexer.errors:
-            error_msg += f'  Línea {ln}, col {col}: {msg}\n'
-
-        raise Exception(error_msg)
-
-    # ───────── FASE 2: SINTÁCTICO ─────────
-
+        msg = f'\nErrores léxicos ({len(lexer.errors)}):\n'
+        for ln, col, m in lexer.errors:
+            msg += f'  Línea {ln}, col {col}: {m}\n'
+        raise Exception(msg)
+    
+    # Parser
     try:
         ast = Parser(tokens).parse()
-
     except ParseError as e:
         raise Exception(f'Error sintáctico:\n{e}')
-
+    
     if args.verbose:
         print('\n=== ÁRBOL SINTÁCTICO ===\n')
         print_ast(ast)
-
-    # ───────── FASE 3: SEMÁNTICO ─────────
-
+    
+    # Semantico
     sem = SemanticAnalyzer()
     sem.visit(ast)
-
+    
     if args.semantico:
         sem.symbol_table.print_table()
-
     if args.etiquetas:
         sem.print_labels()
-
     if args.memoria:
         sem.print_memory()
-
+    
     if sem.errors:
-
-        error_msg = f'\nErrores semánticos ({len(sem.errors)}):\n'
-
+        msg = f'\nErrores semánticos ({len(sem.errors)}):\n'
         for e in sem.errors:
-            error_msg += f'  {e}\n'
-
-        raise Exception(error_msg)
-
+            msg += f'  {e}\n'
+        raise Exception(msg)
+    
     return ast, sem
 
 
-# Main
 def main():
     import argparse
-
-    ap = argparse.ArgumentParser(
-        description='Compilador Yeison → TEA-ISA binario',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Ejemplos:
-  python main.py programa.yeison -S          # mostrar ASM generado
-  python main.py programa.yeison -b          # compilar a .bin
-  python main.py programa.yeison -b -x       # compilar a .bin y .hex
-  python main.py programa.yeison -a          # todo (AST, tokens, ASM, binario)
-  python main.py programa.yeison -b -o salida  # binario en salida.bin
-  python main.py programa.asm -A -b          # compilar desde .asm directo
-        """
-    )
-
-    ap.add_argument('archivo',            help='Archivo fuente .yeison o .asm')
-    ap.add_argument('-v', '--verbose',    action='store_true', help='Mostrar AST')
-    ap.add_argument('-l', '--lexer',      action='store_true', help='Mostrar tokens')
-    ap.add_argument('-s', '--semantico',  action='store_true', help='Mostrar tabla de símbolos')
-    ap.add_argument('-m', '--memoria',    action='store_true', help='Mostrar mapa de memoria')
-    ap.add_argument('-e', '--etiquetas',  action='store_true', help='Mostrar etiquetas de salto')
-    ap.add_argument('-S', '--asm',        action='store_true', help='Mostrar ASM generado y resuelto')
-    ap.add_argument('-b', '--binario',    action='store_true', help='Generar archivo .bin')
-    ap.add_argument('-x', '--hex',        action='store_true', help='Generar hex dump .hex (requiere -b)')
-    ap.add_argument('-o', '--output',     help='Nombre base del archivo de salida (sin extensión)')
-    ap.add_argument('-a', '--all',        action='store_true', help='Activar todos los reportes y generar binario')
-    ap.add_argument('-A', '--from-asm',   action='store_true', help='Compilar desde .asm (saltar fases 1-3)')
-
+    
+    # Configurar argumentos
+    ap = argparse.ArgumentParser(description='Compilador Yeison → TEA-ISA binario')
+    ap.add_argument('archivo')
+    ap.add_argument('-v', '--verbose', action='store_true')
+    ap.add_argument('-l', '--lexer', action='store_true')
+    ap.add_argument('-s', '--semantico', action='store_true')
+    ap.add_argument('-m', '--memoria', action='store_true')
+    ap.add_argument('-e', '--etiquetas', action='store_true')
+    ap.add_argument('-S', '--asm', action='store_true')
+    ap.add_argument('-b', '--binario', action='store_true')
+    ap.add_argument('-x', '--hex', action='store_true')
+    ap.add_argument('-o', '--output')
+    ap.add_argument('-a', '--all', action='store_true')
+    ap.add_argument('-A', '--from-asm', action='store_true')
     args = ap.parse_args()
-
-    # -a activa todo
+    
+    # Activar todas las opciones si se pide
     if args.all:
-        args.verbose   = True
-        args.lexer     = True
-        args.semantico = True
-        args.memoria   = True
-        args.etiquetas = True
-        args.asm       = True
-        args.binario   = True
-        args.hex       = True
-
-    # Determinar nombre base de salida
-    if args.output:
-        base_name = args.output
-    else:
-        base_name = os.path.splitext(args.archivo)[0]
-
-    # ── Obtener asm_code: desde .asm directo o desde pipeline normal ──
+        args.verbose = args.lexer = args.semantico = True
+        args.memoria = args.etiquetas = args.asm = args.binario = args.hex = True
+    
+    nombre_base = args.output or os.path.splitext(args.archivo)[0]
+    
+    # Compilar desde archivo .asm o desde fuente
     if args.from_asm:
         try:
             with open(args.archivo, encoding='utf-8') as f:
                 asm_code = f.read()
         except FileNotFoundError:
-            print(f'Error: archivo no encontrado: {args.archivo}')
+            print(f'Error: {args.archivo}')
             return 1
     else:
-        # Cargar fuente resolviendo imports
         try:
-            source = load_with_imports(args.archivo)
+            source = cargar_con_imports(args.archivo)
         except FileNotFoundError as e:
             print(f'Error: {e}')
             return 1
-
-        # Fases 1-3: léxico, sintáctico, semántico
-        ast, sem = run_phases_1_to_3(source, args)
-
-        # Fase 4: Generación de ensamblador
-        gen      = AsmGen(sem)
+        
+        ast, sem = ejecutar_fases_1_a_3(source, args)
+        gen = AsmGen(sem)
         asm_code = gen.generate(ast)
-
-    # ── Desde aquí igual para ambas ramas ──
-
+    
+    # Mostrar ASM si se pide
     if args.asm:
         print('\n=== ASM GENERADO ===\n')
         print(asm_code)
-
-    # Fase 5: Resolución de referencias (etiquetas → offsets numéricos)
-    resolver     = Resolver(asm_code)
+    
+    # Resolver etiquetas
+    resolver = Resolver(asm_code)
     resolved_asm = resolver.resolve()
-
+    
     if args.asm:
         print('\n=== ASM RESUELTO ===\n')
         print(resolved_asm)
-
-        # Mostrar tabla de etiquetas si se pidió debug
         if args.etiquetas:
-            print('\n=== TABLA DE ETIQUETAS (Resolver) ===')
-            for label, addr in resolver.get_label_table().items():
-                print(f'  {label:<30} 0x{addr:04X}')
-
-    # Guardar ASM si se pidió output y se generó ASM
+            print('\n=== TABLA DE ETIQUETAS ===')
+            for lbl, addr in resolver.get_label_table().items():
+                print(f'  {lbl:<30} 0x{addr:04X}')
+    
+    # Guardar ASM si se pide
     if args.output and args.asm:
-        asm_path = base_name + '.asm'
-        with open(asm_path, 'w', encoding='utf-8') as f:
+        with open(nombre_base + '.asm', 'w', encoding='utf-8') as f:
             f.write(asm_code)
-        print(f'\nASM guardado en: {asm_path}')
-
-    # Fase 6: Generación de binario
+    
+    # Generar binario
     if args.binario:
-        hex_path = (base_name + '.mem') if args.hex else None
-        bin_path = base_name + '.bin'
-
         bg = BinaryGen(resolved_asm)
-        ok = bg.generate(bin_path, hex_path)
-
-        if not ok:
-            print('\nFalló la generación del binario.')
+        archivo_hex = (nombre_base + '.mem') if args.hex else None
+        if not bg.generate(nombre_base + '.bin', archivo_hex):
+            print('Falló generación binaria.')
             return 1
-
+    
     return 0
 
 

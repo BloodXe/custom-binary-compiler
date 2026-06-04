@@ -3,6 +3,6 @@ var resultado : int = 0'
 
 func main()::void{
 
-    resultado = suma.suma(5, 4)'
+    resultado = suma.suma(5, 1)'
 
 }
