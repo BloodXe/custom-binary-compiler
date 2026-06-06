@@ -224,6 +224,47 @@ class IRGen:
         l_start = self.new_label()
         l_end   = self.new_label()
 
+        # Extraer info de la condición para anotación de unrolling
+        loop_var   = "?"
+        loop_limit = "?"
+        loop_step  = "1"
+
+        # Intentar extraer variable de inicialización
+        if node.init is not None:
+            from compiler.ast_nodes import Assignment, VarDeclaration, Identifier
+            if isinstance(node.init, (Assignment, VarDeclaration)):
+                try:
+                    if isinstance(node.init, VarDeclaration):
+                        loop_var = node.init.name
+                    elif isinstance(node.init, Assignment):
+                        if isinstance(node.init.target, Identifier):
+                            loop_var = node.init.target.name
+                except Exception:
+                    pass
+
+        # Intentar extraer límite de la condición
+        if node.condition is not None:
+            from compiler.ast_nodes import BinaryOp, IntLiteral, Identifier
+            cond = node.condition
+            if isinstance(cond, BinaryOp) and isinstance(cond.right, IntLiteral):
+                loop_limit = str(cond.right.value)
+            elif isinstance(cond, BinaryOp) and isinstance(cond.right, Identifier):
+                loop_limit = cond.right.name
+
+        # Intentar extraer paso del update
+        if node.update is not None:
+            from compiler.ast_nodes import Assignment, BinaryOp, IntLiteral
+            upd = node.update
+            if isinstance(upd, Assignment):
+                try:
+                    if isinstance(upd.value, BinaryOp) and isinstance(upd.value.right, IntLiteral):
+                        loop_step = str(upd.value.right.value)
+                except Exception:
+                    pass
+
+        # Emitir anotación de inicio de loop para el optimizador
+        self.emit(f"LOOP_START:{l_start}:{loop_var}:{loop_limit}:{loop_step}")
+
         if node.init is not None:
             self.visit(node.init)
 
@@ -242,3 +283,4 @@ class IRGen:
 
         self.emit(f"goto {l_start}")
         self.emit(f"{l_end}:")
+        self.emit(f"LOOP_END:{l_start}")
