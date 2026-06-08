@@ -71,6 +71,10 @@ class CompilerMenu:
                 out += "=== REPRESENTACIÓN INTERMEDIA ===\n\n" + result["ir"] + "\n\n"
             if result.get("blocks"):
                 out += "=== BLOQUES BÁSICOS ===\n\n" + result["blocks"] + "\n\n"
+            if result.get("optimization"):
+                out += "=== OPTIMIZACIÓN ===\n\n" + result["optimization"] + "\n\n"
+            if result.get("stats"):
+                out += "=== ESTADÍSTICAS DE OPTIMIZACIÓN ===\n\n" + result["stats"] + "\n\n"
             if result.get("asm"):
                 out += "=== ASM GENERADO ===\n\n" + result["asm"] + "\n\n"
             if result.get("resolved_asm"):

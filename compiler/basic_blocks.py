@@ -12,9 +12,10 @@ class BasicBlock:
         lines += [f"  {instr}" for instr in self.lineas]
         return "\n".join(lines)
 
-# Si una instrucción es una etiqueta.
+# Si una instrucción es una etiqueta o marca de inicio/fin de función (inician bloque nuevo)
 def is_label(instr):
-    return instr.strip().endswith(":")
+    s = instr.strip()
+    return s.endswith(":") or s.startswith("begin_func") or s.startswith("end_func")
 
 # Si una instrucción produce un salto
 def is_jump(instr):
