@@ -200,24 +200,80 @@ class IRGen:
         self.emit(f"{l_end}:")
 
     def visit_WhileStatement(self, node):
-
-        # Crea las etiquetas necesarias
+        
+        # Crear las etiquetas necesarias para controlar el flujo del ciclo
         l_start = self.new_label()
-        l_body  = self.new_label()
         l_end   = self.new_label()
 
-        # Si se cumple alguna hace el salto, si no se cumple salta al final
+        # Valores por defecto por si no logramos detectar la variable de control, el límite o el paso
+        loop_var = "?"
+        loop_limit = "?"
+        loop_step = "1"
+
+        # Intentar extraer información desde la condición
+        # Busca algo como: i < 10 o i < n entonces tira la variable y el limite
+        try:
+            from compiler.ast_nodes import BinaryOp, Identifier, IntLiteral
+
+            cond = node.condition
+
+            # Solo funciona si la condición es un BinaryOp con un lado como variable y el otro como literal o variable
+            if isinstance(cond, BinaryOp):
+                # Parte izquierda
+                if isinstance(cond.left, Identifier):
+                    loop_var = cond.left.name
+
+                # Parte derecha
+                if isinstance(cond.right, IntLiteral):
+                    loop_limit = str(cond.right.value)
+                elif isinstance(cond.right, Identifier):
+                    loop_limit = cond.right.name
+        # Si falla solo tiramos los de defecto
+        except Exception:
+            pass
+
+        # Intentar detectar el paso del ciclo
+        # Busca algo como: i = i + 1 y así
+        try:
+            from compiler.ast_nodes import Assignment, BinaryOp, Identifier, IntLiteral
+
+            # Revisar todas las instrucciones del cuerpo
+            for instr in node.body:
+                # Solo nos interesan asignaciones
+                if isinstance(instr, Assignment):
+                    # Solo hace si es la misma variable del loop
+                    if isinstance(instr.target, Identifier) and instr.target.name == loop_var:
+                        # Revisa el Binary op el lado derecho
+                        if isinstance(instr.value, BinaryOp):
+                            # Ahí revisa si es como i+1 o i-1 
+                            if (
+                                isinstance(instr.value.left, Identifier)
+                                and instr.value.left.name == loop_var
+                                and isinstance(instr.value.right, IntLiteral)
+                            ):
+                                if instr.value.op == "+":
+                                    loop_step = str(instr.value.right.value)
+                                elif instr.value.op == "-":
+                                    loop_step = str(-instr.value.right.value)
+        except Exception:
+            pass
+
+        # Marcas para que optimizer.py pueda reconocer el while
+        self.emit(f"LOOP_START:{l_start}:{loop_var}:{loop_limit}:{loop_step}")
+
         self.emit(f"{l_start}:")
+        # Generar la condición
         cond = self.visit(node.condition)
-        self.emit(f"if {cond} goto {l_body}")
-        self.emit(f"goto {l_end}")
+        # Si la condición es falsa salimos del ciclo
+        self.emit(f"iffalse {cond} goto {l_end}")
 
-        self.emit(f"{l_body}:")
-        for stmt in node.body:
-            self.visit(stmt)
+        # Generar todas las instrucciones del while (sin etiqueta de cuerpo extra)
+        for instr in node.body:
+            self.visit(instr)
+        
         self.emit(f"goto {l_start}")
-
         self.emit(f"{l_end}:")
+        self.emit(f"LOOP_END:{l_start}")
 
     def visit_ForStatement(self, node):
         # Crea las etiquetas necesarias
@@ -274,9 +330,9 @@ class IRGen:
             cond = self.visit(node.condition)
             self.emit(f"iffalse {cond} goto {l_end}")   # sale si la condición es falsa
 
-        for stmt in node.body:
-            if stmt is not None:
-                self.visit(stmt)
+        for instr in node.body:
+            if instr is not None:
+                self.visit(instr)
 
         if node.update is not None:
             self.visit(node.update)

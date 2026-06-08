@@ -11,6 +11,22 @@ class OptStats:
         self.instr_before = 0
         self.instr_after = 0
 
+    def _count_instrs(self, lines):
+        """Cuenta solo instrucciones ejecutables reales, excluyendo etiquetas y anotaciones del compilador."""
+        count = 0
+        for l in lines:
+            s = l.strip()
+            if not s:
+                continue
+            if s.endswith(':'):
+                continue
+            if s.startswith('LOOP_'):
+                continue
+            if s.startswith('#'):
+                continue
+            count += 1
+        return count
+
     def __str__(self):
         return "\n".join([
             "Estadisticas de Optimizacion",
@@ -154,16 +170,49 @@ def _parse_loop_body(body: List[str], var: str, step_val: int) -> Optional[dict]
 
 
 
+# Renombra todas las etiquetas internas de un bloque de líneas añadiendo un sufijo único,
+# y actualiza los goto/if/iffalse que las referencian.
+def _rename_labels(lines: List[str], suffix: str) -> List[str]:
+    # Detectar qué etiquetas existen en el bloque
+    labels = set()
+    for line in lines:
+        s = line.strip()
+        if s.endswith(':') and not s.startswith('LOOP_'):
+            labels.add(s[:-1])
+
+    result = []
+    for line in lines:
+        s = line.strip()
+        new = line
+        # Renombrar definición de etiqueta
+        if s.endswith(':') and not s.startswith('LOOP_') and s[:-1] in labels:
+            new = f'{s[:-1]}{suffix}:'
+        else:
+            # Renombrar referencias en saltos
+            for lbl in sorted(labels, key=len, reverse=True):
+                new = re.sub(r'\b' + re.escape(lbl) + r'\b', lbl + suffix, new)
+        result.append(new)
+    return result
+
+
+def _copy_lines(lines: List[str], temp_prefix: str, label_suffix: str = "") -> List[str]:
+    """Copia un bloque renombrando temporales y, opcionalmente, etiquetas internas."""
+    copied = [_rename_temps(l, temp_prefix) for l in lines]
+    if label_suffix:
+        copied = _rename_labels(copied, label_suffix)
+    return copied
+
+
 #LOOP UNROLLING
 def loop_unrolling(lines: List[str],
                    factor: int = 4,
                    total: bool = False,
                    stats: OptStats = None) -> List[str]:
 
-    #Desenrolla loops anotados con LOOP_START / LOOP_END
-
-    #total=True   unrolling TOTAL (elimina el loop, sustituye i=0,1,2,...)
-    #total=False  unrolling PARCIAL (loop corre ceil(iters/factor) cada vuelta hace 'factor' unidades de trabajo
+    # Desenrolla loops anotados con LOOP_START / LOOP_END
+    # total=True  → unrolling TOTAL (elimina el loop, sustituye i=0,1,2,...)
+    # total=False → unrolling PARCIAL (cada vuelta del loop ejecuta 'factor'
+    #               unidades de trabajo; se añade ciclo residual si hace falta)
 
     result = []
     i = 0
@@ -171,7 +220,7 @@ def loop_unrolling(lines: List[str],
     while i < len(lines):
         line = lines[i].strip()
 
-        #Buscar el inicio de un ciclo marcado para optimización
+        # Buscar el inicio de un ciclo marcado para optimización
         m = re.match(
             r'^LOOP_START:([^:]+):([^:]+):([^:]+):([^:]+)$',
             line
@@ -183,43 +232,45 @@ def loop_unrolling(lines: List[str],
             continue
 
         label_ann = m.group(1)
-        var = m.group(2)
+        var       = m.group(2)
         limit_str = m.group(3)
-        step_str = m.group(4)
+        step_str  = m.group(4)
 
-        #Guardar todas las instrucciones que pertenecen al ciclo
+        # Recoger todas las instrucciones que pertenecen al ciclo
         body = []
         j = i + 1
-
         while j < len(lines) and lines[j].strip() != f'LOOP_END:{label_ann}':
             body.append(lines[j])
             j += 1
 
-        #Si no aparece el final del ciclo se deja sin modificar
+        # Si no aparece el final del ciclo, dejarlo sin modificar
         if j >= len(lines):
             result.append(lines[i])
             i += 1
             continue
 
         try:
-            lim_val = int(limit_str)
+            lim_val  = int(limit_str)
             step_val = int(step_str)
 
             if step_val == 0:
                 raise ValueError("paso cero")
 
-            #Calculo de iteraciones
+            # Número de iteraciones del loop original
             iters = math.ceil(lim_val / abs(step_val)) if step_val > 0 else 0
 
             if iters <= 0:
+                # Loop que nunca ejecuta, dejarlo intacto
                 result.append(lines[i])
-                i += 1
+                result.extend(body)
+                result.append(f'LOOP_END:{label_ann}')
+                i = j + 1
                 continue
 
             parts = _parse_loop_body(body, var, step_val)
 
+            # ── UNROLLING TOTAL ──────────────────────────────────────────────
             if total and parts is not None and iters <= 64:
-                #total = eliminar loop, emitir cuerpo con i sustituido
                 result.append(f'#TOTAL_UNROLL x{iters}: {line}')
                 result.extend(parts['init'])
 
@@ -227,48 +278,43 @@ def loop_unrolling(lines: List[str],
                     i_val = rep * step_val
                     result.append(f'#iteracion {rep} (i={i_val})')
                     work = _substitute_var(parts['work_lines'], var, i_val)
-
                     for w in work:
                         result.append(_rename_temps(w, f'__t{rep}_'))
 
                 if stats:
-                    stats.unrolled_loops += 1
+                    stats.unrolled_loops      += 1
                     stats.unrolled_iterations += iters - 1
 
+            # ── UNROLLING PARCIAL ────────────────────────────────────────────
             else:
                 reps = min(factor, iters)
 
                 if reps < 2 or parts is None:
-                    #No se puede unrollar, se deja intacto
+                    # No se puede desenrollar, dejarlo intacto
                     result.append(lines[i])
                     result.extend(body)
                     result.append(f'LOOP_END:{label_ann}')
                     i = j + 1
                     continue
 
-                #parcial: replicar cuerpo reps veces dentro del loop
                 result.append(f'#PARTIAL_UNROLL x{reps}: {line}')
                 result.extend(parts['init'])
 
+                # ── Cuerpo del loop principal (grupos de 'reps' iteraciones) ─
                 if parts['label']:
                     result.append(parts['label'])
 
-                result.extend(parts['cond_lines'])
-
+                # En cada copia se vuelve a chequear la condición. Así el
+                # desenrollado parcial sigue siendo correcto aunque el número de
+                # iteraciones no sea múltiplo del factor. Por eso NO hace falta
+                # un bloque residual aparte.
                 for rep in range(reps):
                     result.append(f'#copia {rep}')
 
-                    for w in parts['work_lines']:
-                        result.append(_rename_temps(w, f'__p{rep}_'))
+                    result.extend(_copy_lines(parts['cond_lines'], f'__c{rep}_'))
 
-                    if rep < reps - 1:
-                        tmp = f't__inc{rep}_'
-                        result.append(f'{tmp} = {var} + {step_val}')
-                        result.append(f'{var} = {tmp}')
-
-                tmp_upd = 't__upd_'
-                result.append(f'{tmp_upd} = {var} + {reps * step_val}')
-                result.append(f'{var} = {tmp_upd}')
+                    body_copy = parts['work_lines'] + parts['update_lines']
+                    result.extend(_copy_lines(body_copy, f'__p{rep}_', f'_u{rep}'))
 
                 if parts['goto_line']:
                     result.append(parts['goto_line'])
@@ -276,11 +322,16 @@ def loop_unrolling(lines: List[str],
                 result.extend(parts.get('after_goto', []))
 
                 if stats:
-                    stats.unrolled_loops += 1
+                    stats.unrolled_loops      += 1
                     stats.unrolled_iterations += reps - 1
 
+        # ── LÍMITE VARIABLE (VAR_UNROLL) ─────────────────────────────────────
+        # El límite no es un literal entero: no sabemos cuántas iteraciones hay.
+        # Solo podemos replicar el cuerpo 'factor' veces DENTRO del loop,
+        # re-chequeando la condición antes de cada copia.
+        # NO se pueden hacer incrementos intermedios de la variable de control
+        # porque el trabajo del cuerpo ya la modifica (e.g. n = n - divisor).
         except (ValueError, TypeError):
-            #Limite variable, factor fijo sin modificar la estructura
             parts = _parse_loop_body(body, var, 1)
 
             if parts is None or factor < 2:
@@ -294,20 +345,16 @@ def loop_unrolling(lines: List[str],
                 if parts['label']:
                     result.append(parts['label'])
 
-                result.extend(parts['cond_lines'])
-
+                # Cada copia: chequear condición → ejecutar cuerpo completo.
+                # En loops con límite variable, el update puede estar dentro del
+                # cuerpo real (ej.: n = n - divisor), por eso se copia también
+                # update_lines.
                 for rep in range(factor):
                     result.append(f'#copia {rep}')
+                    result.extend(_copy_lines(parts['cond_lines'], f'__vc{rep}_'))
 
-                    for w in parts['work_lines']:
-                        result.append(_rename_temps(w, f'__v{rep}_'))
-
-                    if rep < factor - 1:
-                        tmp = f't__vinc{rep}_'
-                        result.append(f'{tmp} = {var} + 1')
-                        result.append(f'{var} = {tmp}')
-
-                result.extend(parts['update_lines'])
+                    body_copy = parts['work_lines'] + parts['update_lines']
+                    result.extend(_copy_lines(body_copy, f'__v{rep}_', f'_v{rep}'))
 
                 if parts['goto_line']:
                     result.append(parts['goto_line'])
@@ -315,7 +362,7 @@ def loop_unrolling(lines: List[str],
                 result.extend(parts.get('after_goto', []))
 
                 if stats:
-                    stats.unrolled_loops += 1
+                    stats.unrolled_loops      += 1
                     stats.unrolled_iterations += factor - 1
 
         i = j + 1
@@ -326,9 +373,12 @@ def loop_unrolling(lines: List[str],
 #REGISTER RENAMING
 def register_renaming(lines: List[str],
                       stats: OptStats = None) -> List[str]:
-    #Crea nuevas versiones de los temporales cada vez que son redefinidos y renombra temporales tN para eliminar dependencias WAR/WAW
-    #Cada nueva definicion de tN genera version tN_vK
-    #Solo renombra temporales tN, las variables del usuario no cambian
+    """Renombra temporales tN con versiones tN_vK.
+
+    Corrección importante: primero se separa el lado izquierdo del derecho.
+    Así, cuando se redefine un temporal, no se reemplaza accidentalmente el
+    temporal del lado izquierdo por su versión anterior.
+    """
     current = {}
     version = {}
     result = []
@@ -336,53 +386,41 @@ def register_renaming(lines: List[str],
     for line in lines:
         s = line.strip()
 
-        #Estas líneas no necesitan modificarse
         if not s or s.endswith(':') or s.startswith('LOOP_') or s.startswith('#'):
             result.append(line)
             continue
 
-        #Actualizar referencias usando la versión más reciente
-        new_line = line
-
-        for old, new in sorted(
-            current.items(),
-            key=lambda x: len(x[0]),
-            reverse=True
-        ):
-            new_line = re.sub(
-                r'\b' + re.escape(old) + r'\b',
-                new,
-                new_line
-            )
-
-        #Si un temporal se redefine, crea una nueva versión
         d = get_def(s)
 
-        if d and re.match(r'^t\d+$', d):
-            version[d] = version.get(d, 0) + 1
+        # Caso 1: la línea define un temporal tN.
+        if d and re.match(r'^t\d+$', d) and '=' in line:
+            lhs, rhs = line.split('=', 1)
 
+            # El RHS usa las versiones vigentes.
+            new_rhs = rhs
+            for old, new in sorted(current.items(), key=lambda x: len(x[0]), reverse=True):
+                new_rhs = re.sub(r'\b' + re.escape(old) + r'\b', new, new_rhs)
+
+            # El LHS recibe una versión nueva.
+            version[d] = version.get(d, 0) + 1
             new_name = f'{d}_v{version[d]}'
             current[d] = new_name
 
-            if '=' in new_line:
-                eq = new_line.index('=')
-
-                new_line = (
-                    re.sub(
-                        r'\b' + re.escape(d) + r'\b',
-                        new_name,
-                        new_line[:eq]
-                    )
-                    + new_line[eq:]
-                )
+            new_lhs = re.sub(r'\b' + re.escape(d) + r'\b', new_name, lhs)
+            result.append(new_lhs + '=' + new_rhs)
 
             if stats:
                 stats.renamed += 1
+            continue
+
+        # Caso 2: cualquier otra línea solo actualiza usos.
+        new_line = line
+        for old, new in sorted(current.items(), key=lambda x: len(x[0]), reverse=True):
+            new_line = re.sub(r'\b' + re.escape(old) + r'\b', new, new_line)
 
         result.append(new_line)
 
     return result
-
 
 def optimize(ir_code: str,
              unroll_factor: int = 4,
@@ -396,10 +434,7 @@ def optimize(ir_code: str,
 
     lines = ir_code.splitlines()
 
-    stats.instr_before = sum(
-        1 for l in lines
-        if l.strip() and not l.strip().endswith(':')
-    )
+    stats.instr_before = stats._count_instrs(lines)
 
     if enable_unroll:
         lines = loop_unrolling(
@@ -415,9 +450,6 @@ def optimize(ir_code: str,
             stats=stats
         )
 
-    stats.instr_after = sum(
-        1 for l in lines
-        if l.strip() and not l.strip().endswith(':')
-    )
+    stats.instr_after = stats._count_instrs(lines)
 
     return "\n".join(lines), stats

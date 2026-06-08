@@ -2,6 +2,7 @@ import os
 import sys
 import re
 
+from compiler.optimizer import optimize
 from compiler.lexer import Lexer
 from compiler.parser import Parser, ParseError
 from compiler.ast_nodes import AstNode
@@ -53,7 +54,7 @@ def _resultado_error(fase, mensaje, errores=None):
     }
 
 #crea el diccionario de resultado cuando todo sale bien
-def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None):
+def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None, optimization=None, stats=None):
 
     return {
         "success": True,
@@ -63,7 +64,9 @@ def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None):
         "ir": ir_code,
         "blocks": blocks_code,
         "asm": asm_code,
-        "resolved_asm": resolved_asm
+        "resolved_asm": resolved_asm,
+        "optimization": optimization,
+        "stats": str(stats)
     }
 
 #Compila codigo fuente y devuelve el resultado
@@ -114,7 +117,7 @@ def compile_source(source: str) -> dict:
             errores.append(_crear_error(e_str, "semantic", ln, col))
         return _resultado_error("semantic", mensaje, errores)
     
-    #FASE 3.5 - REPRESENTACION INTERMEDIA Y BLOQUES BASICOS
+    #FASE 3.25 - REPRESENTACION INTERMEDIA Y BLOQUES BASICOS
     try:
         ir_code = IRGen().generate(ast)
         blocks = build_basic_blocks(ir_code)
@@ -122,13 +125,19 @@ def compile_source(source: str) -> dict:
     except Exception as e:
         return _resultado_error("ir", str(e))
     
+    # FASE 3.5 - OPTIMIZACION (Loop unrolling y renombramiento)
+    try:
+        optimization, stats = optimize(ir_code)
+    except Exception as e:
+        return _resultado_error("optimization", str(e))   
+    
     #FASE 4 y 5 GENERACION DE CODIGO 
     try:
         gen = AsmGen(sem)
         asm_code = gen.generate(ast)
         resolver = Resolver(asm_code)
         resolved_asm = resolver.resolve()
-        return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code)
+        return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code, optimization, stats)
     except Exception as e:
         return _resultado_error("codegen", str(e))
 

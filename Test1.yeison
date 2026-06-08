@@ -50,7 +50,7 @@ func sume() :: int {
     var val : int = 0'     
     var primo : int = 0'   
 
-    mientras (i < 10) {
+    mientras (i < 3) {
         val = lista[i]'
         primo = es_primo(val)'
         si (primo == 2) {
