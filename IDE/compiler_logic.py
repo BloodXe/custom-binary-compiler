@@ -70,7 +70,7 @@ def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None, opt
     }
 
 #Compila codigo fuente y devuelve el resultado
-def compile_source(source: str) -> dict:
+def compile_source(source: str, opt_config: dict = None) -> dict:
 
     
     #ASE 1 LEXICO
@@ -127,7 +127,16 @@ def compile_source(source: str) -> dict:
     
     # FASE 3.5 - OPTIMIZACION (Loop unrolling y renombramiento)
     try:
-        optimization, stats = optimize(ir_code)
+        cfg = opt_config or {}
+        optimization, stats = optimize(
+            ir_code,
+            enable_unroll  = cfg.get("unroll",  True),
+            unroll_factor  = cfg.get("factor",  4),
+            total_unroll   = cfg.get("total",   False),
+            enable_rename  = cfg.get("rename",  True),
+            enable_dce     = cfg.get("dce",     True),
+            enable_reorder = cfg.get("reorder", False),
+        )
     except Exception as e:
         return _resultado_error("optimization", str(e))   
     
