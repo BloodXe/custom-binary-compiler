@@ -8,6 +8,7 @@ from compiler.parser import Parser, ParseError
 from compiler.ast_nodes import AstNode
 from compiler.semantic import SemanticAnalyzer
 from compiler.asmgen import AsmGen
+from compiler.asmgen2 import AsmGen2
 from compiler.resolver import Resolver
 from compiler.binary_gen import BinaryGen
 from compiler.IRGen import IRGen
@@ -142,8 +143,18 @@ def compile_source(source: str, opt_config: dict = None) -> dict:
     
     #FASE 4 y 5 GENERACION DE CODIGO 
     try:
-        gen = AsmGen(sem)
-        asm_code = gen.generate(ast)
+        # Si hay optimizaciones activas, usar asmgen2 que trabaja sobre el IR optimizado
+        any_opt = any([
+            cfg.get("unroll",  True),
+            cfg.get("rename",  True),
+            cfg.get("dce",     True),
+            cfg.get("reorder", False),
+        ])
+        if any_opt and optimization:
+            asm_code = AsmGen2().generate(optimization)
+        else:
+            gen = AsmGen(sem)
+            asm_code = gen.generate(ast)
         resolver = Resolver(asm_code)
         resolved_asm = resolver.resolve()
         return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code, optimization, stats)
