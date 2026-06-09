@@ -394,3 +394,19 @@ class ImportStatement(AstNode):
 
     def __repr__(self):
         return f'ImportStatement({self.module})'
+
+
+class SaveStatement(AstNode):
+    """Marca una variable como observable para DCE: save(nombre) '
+    Cualquier definición que contribuya al valor de 'name' se considera viva.
+    """
+
+    def __init__(self, name: str):
+        self.name = name  # nombre de la variable a preservar
+
+    @property
+    def children(self):
+        return []
+
+    def __repr__(self):
+        return f'SaveStatement({self.name})'

@@ -1,5 +1,5 @@
 ## Generación de Representación Intermedia
-from compiler.ast_nodes import IndexAccess
+from compiler.ast_nodes import IndexAccess, SaveStatement
 
 class IRGen:
     def __init__(self):
@@ -172,6 +172,10 @@ class IRGen:
         else:
             value = self.visit(node.value)
             self.emit(f"return {value}")
+
+    def visit_SaveStatement(self, node):
+        # Marca la variable como observable: el DCE la usará como raíz de liveness
+        self.emit(f"save {node.name}")
 
 
     ############# Estructuras de control #############

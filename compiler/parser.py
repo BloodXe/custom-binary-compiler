@@ -5,7 +5,8 @@ from compiler.ast_nodes import (
     Program, TypeNode, Identifier, IndexAccess,
     IntLiteral, RealLiteral, BoolLiteral, StringLiteral, HexLiteral, ListLiteral,
     BinaryOp, UnaryOp, FunctionCall,VarDeclaration, ConstDeclaration, Assignment, ExpressionStatement, FunctionDeclaration,
-    IfStatement, WhileStatement, ForStatement, ReturnStatement, ImportStatement, SectionBlock
+    IfStatement, WhileStatement, ForStatement, ReturnStatement, ImportStatement, SectionBlock,
+    SaveStatement
 )
 
 
@@ -101,6 +102,8 @@ class Parser:
             return self.parse_return()
         if tok.type == TokenType.IMPORTAR: 
             return self.parse_import()
+        if tok.type == TokenType.SAVE:
+            return self.parse_save()
         if tok.type == TokenType.IDENTIFIER: 
             return self.parse_ident_statement()
         
@@ -262,6 +265,17 @@ class Parser:
         name = self.eat(TokenType.IDENTIFIER).value
         self.eat_terminator()
         return ImportStatement(name)
+
+    def parse_save(self) -> SaveStatement:
+        """Parsea: save(nombre) '
+        Marca la variable como observable para el análisis de código muerto (DCE).
+        """
+        self.eat(TokenType.SAVE)
+        self.eat(TokenType.LPAREN)
+        name = self.eat(TokenType.IDENTIFIER).value
+        self.eat(TokenType.RPAREN)
+        self.eat_terminator()
+        return SaveStatement(name)
 
     def parse_ident_statement(self):
         """Parsea una sentencia que empieza con un identificador.
