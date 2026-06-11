@@ -24,6 +24,7 @@ class TokenType(Enum):
     AUTHORIZE = auto()
     VKLOAD   = auto()   # vkload(slot, key)
     VKINV    = auto()   # vkinv(slot)
+    SAVE     = auto()   # save(var)  — marca variable como observable para DCE
 
     #Anotaciones
     ANNOTATION = auto()  # @boveda  @code
@@ -118,6 +119,7 @@ class Lexer:
         'setpwd': TokenType.SETPWD,'authchk': TokenType.AUTHCHK,
         'authorize': TokenType.AUTHORIZE,'vkload': TokenType.VKLOAD,
         'vkinv': TokenType.VKINV,
+        'save':  TokenType.SAVE,
     }
 
     #Anotaciones válidas

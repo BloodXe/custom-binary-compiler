@@ -422,6 +422,150 @@ def register_renaming(lines: List[str],
 
     return result
 
+# Funcion principal de eliminación de código muerto
+def dead_code_elimination(lines: List[str],
+                           stats: OptStats = None) -> List[str]:
+    """Eliminación de código muerto usando análisis de liveness hacia atrás.
+
+    Raíces de liveness (variables siempre vivas):
+      - Instrucciones save(x)    -> x es observable
+      - return <val>             -> val es observable
+      - param <val>              -> val es observable (argumento de llamada)
+      - Asignaciones a arreglos  -> base e índice son observables
+      - Llamadas a función       -> sus argumentos son observables
+
+    Algoritmo (backward):
+      1. Recolectar conjunto inicial de variables vivas (roots).
+      2. Recorrer las instrucciones de abajo hacia arriba.
+      3. Si una instrucción define una variable que NO está en el conjunto
+         de vivas → es código muerto → se elimina.
+      4. Si la instrucción SÍ define una variable viva → marcarla como viva
+         y agregar todos los operandos del lado derecho al conjunto de vivas.
+    """
+
+    def _uses(instr: str) -> List[str]:
+        """Extrae los identificadores usados en el lado derecho de una instrucción."""
+        s = instr.strip()
+
+        # save x  ->  x es usada
+        m = re.match(r'^save\s+(\w+)', s)
+        if m:
+            return [m.group(1)]
+
+        # return val
+        m = re.match(r'^return\s+(.+)$', s)
+        if m:
+            return [t for t in re.findall(r'[a-zA-Z_]\w*', m.group(1))
+                    if _is_var(t)]
+
+        # param val
+        m = re.match(r'^param\s+(.+)$', s)
+        if m:
+            return [t for t in re.findall(r'[a-zA-Z_]\w*', m.group(1))
+                    if _is_var(t)]
+
+        # goto / if / iffalse  → no producen definiciones, sus operandos son vivos
+        if s.startswith('goto ') or s.startswith('if ') or s.startswith('iffalse '):
+            return [t for t in re.findall(r'[a-zA-Z_]\w*', s)
+                    if _is_var(t)]
+
+        # base[idx] = val  →  base, idx y val son usados (escritura a arreglo)
+        m = re.match(r'^(\w+)\[(.+?)\]\s*=\s*(.+)$', s)
+        if m:
+            used = []
+            for part in [m.group(1), m.group(2), m.group(3)]:
+                used += [t for t in re.findall(r'[a-zA-Z_]\w*', part)
+                         if _is_var(t)]
+            return used
+
+        # t = call func, N  → los params anteriores ya se capturan con 'param'
+        m = re.match(r'^\w+\s*=\s*call\s+(\w+)', s)
+        if m:
+            return [m.group(1)] if _is_var(m.group(1)) else []
+
+        # var = expr  → lado derecho
+        if '=' in s:
+            rhs = s.split('=', 1)[1]
+            return [t for t in re.findall(r'[a-zA-Z_]\w*', rhs)
+                    if _is_var(t)]
+
+        return []
+
+    def _is_eliminable(instr: str) -> bool:
+        """True si la instrucción puede eliminarse (solo asignaciones simples)."""
+        s = instr.strip()
+        if not s or s.endswith(':') or s.startswith('#') or s.startswith('LOOP_'):
+            return False
+        # No eliminar estructuras de control ni llamadas con efectos
+        if (s.startswith('goto') or s.startswith('if') or s.startswith('iffalse')
+                or s.startswith('return') or s.startswith('param')
+                or s.startswith('save') or s.startswith('begin_func')
+                or s.startswith('end_func') or s.startswith('fparam')):
+            return False
+        # No eliminar escrituras a arreglo (efecto en memoria)
+        if re.match(r'^\w+\[', s):
+            return False
+        # No eliminar llamadas a función sin asignación (efectos secundarios)
+        if re.match(r'^call\s+', s):
+            return False
+        # Solo eliminamos: var = expr
+        return bool(re.match(r'^\w+\s*=', s))
+
+    # ── Paso 1: recolectar raíces de liveness ─────────────────────────────
+    live: set = set()
+    for line in lines:
+        s = line.strip()
+        # save x → x es raíz
+        m = re.match(r'^save\s+(\w+)', s)
+        if m:
+            live.add(m.group(1))
+        # return val → val es raíz
+        m = re.match(r'^return\s+([a-zA-Z_]\w*)', s)
+        if m and _is_var(m.group(1)):
+            live.add(m.group(1))
+        # Escrituras a arreglo → base siempre viva
+        m = re.match(r'^(\w+)\[', s)
+        if m:
+            live.add(m.group(1))
+
+    # ── Paso 2: análisis backward ──────────────────────────────────────────
+    kept = [True] * len(lines)
+
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx]
+        s = line.strip()
+
+        if not _is_eliminable(s):
+            # Instrucción no eliminable: sus usos siempre están vivos
+            for v in _uses(s):
+                live.add(v)
+            continue
+
+        defined = get_def(s)
+
+        if defined and defined not in live:
+            # La variable definida nunca se usa → código muerto
+            kept[idx] = False
+            if stats:
+                stats.instr_before  # ya contado
+        else:
+            # La definición es necesaria: agregar sus usos al conjunto vivo
+            if defined:
+                live.discard(defined)
+            for v in _uses(s):
+                live.add(v)
+
+    # ── Paso 3: reconstruir código sin las instrucciones muertas ──────────
+    eliminated = kept.count(False)
+    result = [lines[i] for i in range(len(lines)) if kept[i]]
+
+    if stats:
+        stats.instr_after = stats._count_instrs(result)
+
+    return result
+
+
+
 def optimize(ir_code: str,
              unroll_factor: int = 4,
              total_unroll: bool = False,
@@ -446,6 +590,12 @@ def optimize(ir_code: str,
 
     if enable_rename:
         lines = register_renaming(
+            lines,
+            stats=stats
+        )
+
+    if enable_dce:
+        lines = dead_code_elimination(
             lines,
             stats=stats
         )

@@ -347,6 +347,11 @@ class SemanticAnalyzer:
         s = Symbol(n.module, 'import', 'module', 'global', -1)
         self.symbol_table.define(s)
 
+    def visit_SaveStatement(self, n):
+        # RS-01: la variable pasada a save() debe estar declarada
+        if self.symbol_table.lookup(n.name) is None:
+            self.error(f"RS-01: '{n.name}' no fue declarado (usado en save())", n)
+
     #Regla semantica 5 = los tipos tienen que ser compatibles
     def visit_Assignment(self, n):
         self.check_lvalue(n.target)

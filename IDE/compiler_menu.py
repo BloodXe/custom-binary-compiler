@@ -3,10 +3,10 @@
 
 import sys
 import os
+import tkinter as tk
 from tkinter import Menu, END
 from tkinter.filedialog import asksaveasfilename
 from tkinter.messagebox import showerror
-from unittest import result
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
@@ -34,6 +34,115 @@ _PHASE_LABELS  = {
     "codegen":  "Generación de código",
 }
 
+# ── Configuración de optimizaciones por defecto ──────────────────────────────
+_DEFAULT_OPT = {
+    "unroll":  True,
+    "factor":  4,
+    "total":   False,
+    "rename":  True,
+    "dce":     True,
+    "reorder": False,
+}
+
+
+def _show_opt_dialog(root, current: dict) -> dict | None:
+    """Muestra un diálogo modal para configurar las optimizaciones.
+    Retorna el dict actualizado, o None si el usuario canceló.
+    """
+    dlg = tk.Toplevel(root)
+    dlg.title("Configurar optimizaciones")
+    dlg.resizable(False, False)
+    dlg.configure(bg="#161B22")
+    dlg.grab_set()   # modal
+
+    pad = {"padx": 12, "pady": 4}
+
+    # Variables de control
+    var_unroll  = tk.BooleanVar(value=current["unroll"])
+    var_factor  = tk.IntVar(value=current["factor"])
+    var_total   = tk.BooleanVar(value=current["total"])
+    var_rename  = tk.BooleanVar(value=current["rename"])
+    var_dce     = tk.BooleanVar(value=current["dce"])
+    var_reorder = tk.BooleanVar(value=current["reorder"])
+    result      = {"ok": False}
+
+    def label(text, row, col=0):
+        tk.Label(dlg, text=text, bg="#161B22", fg="#C9D1D9",
+                 font=("Consolas", 10)).grid(row=row, column=col,
+                 sticky="w", **pad)
+
+    def check(var, text, row):
+        tk.Checkbutton(dlg, text=text, variable=var,
+                       bg="#161B22", fg="#C9D1D9", selectcolor="#0D1117",
+                       activebackground="#161B22", activeforeground="white",
+                       font=("Consolas", 10)).grid(row=row, column=0,
+                       columnspan=2, sticky="w", **pad)
+
+    # ── Título ────────────────────────────────────────────────────────────────
+    tk.Label(dlg, text="Optimizaciones del compilador",
+             bg="#161B22", fg="#58A6FF",
+             font=("Consolas", 11, "bold")).grid(
+             row=0, column=0, columnspan=2, pady=(12, 6), padx=12)
+
+    tk.Frame(dlg, bg="#30363D", height=1).grid(
+        row=1, column=0, columnspan=2, sticky="ew", padx=12)
+
+    # ── Loop Unrolling ────────────────────────────────────────────────────────
+    check(var_unroll, "Loop unrolling", 2)
+
+    label("  Factor de unrolling:", 3)
+    spin = tk.Spinbox(dlg, from_=2, to=16, textvariable=var_factor, width=5,
+                      bg="#0D1117", fg="#C9D1D9", insertbackground="white",
+                      font=("Consolas", 10), buttonbackground="#21262D")
+    spin.grid(row=3, column=1, sticky="w", **pad)
+
+    check(var_total, "  Unrolling total (ignorar factor)", 4)
+
+    def _toggle_unroll_opts(*_):
+        state = "normal" if var_unroll.get() else "disabled"
+        spin.config(state=state)
+    var_unroll.trace_add("write", _toggle_unroll_opts)
+    _toggle_unroll_opts()
+
+    tk.Frame(dlg, bg="#30363D", height=1).grid(
+        row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=4)
+
+    # ── Otras optimizaciones ─────────────────────────────────────────────────
+    check(var_rename,  "Renombramiento de registros", 6)
+    check(var_dce,     "Eliminación de código muerto (DCE)", 7)
+    check(var_reorder, "Reordenamiento de instrucciones", 8)
+
+    tk.Frame(dlg, bg="#30363D", height=1).grid(
+        row=9, column=0, columnspan=2, sticky="ew", padx=12, pady=4)
+
+    # ── Botones ───────────────────────────────────────────────────────────────
+    btn_frame = tk.Frame(dlg, bg="#161B22")
+    btn_frame.grid(row=10, column=0, columnspan=2, pady=(4, 12), padx=12)
+
+    def on_ok():
+        result["ok"]     = True
+        result["unroll"] = var_unroll.get()
+        result["factor"] = var_factor.get()
+        result["total"]  = var_total.get()
+        result["rename"] = var_rename.get()
+        result["dce"]    = var_dce.get()
+        result["reorder"]= var_reorder.get()
+        dlg.destroy()
+
+    def on_cancel():
+        dlg.destroy()
+
+    tk.Button(btn_frame, text="Aplicar", command=on_ok, width=10,
+              bg="#238636", fg="white", activebackground="#2EA043",
+              font=("Consolas", 10), relief="flat").pack(side="left", padx=4)
+
+    tk.Button(btn_frame, text="Cancelar", command=on_cancel, width=10,
+              bg="#21262D", fg="#C9D1D9", activebackground="#30363D",
+              font=("Consolas", 10), relief="flat").pack(side="left", padx=4)
+
+    dlg.wait_window()
+    return {k: v for k, v in result.items() if k != "ok"} if result["ok"] else None
+
 
 class CompilerMenu:
 
@@ -43,6 +152,20 @@ class CompilerMenu:
         self._err_tags  = []      # tags de error activos en el editor
         self._mode      = "ready" # ready | live | compile | autofix
         self._debounce  = None    # id del after() pendiente para live_check
+        self._opt_config = dict(_DEFAULT_OPT)  # configuración de optimizaciones activa
+
+    def open_opt_dialog(self):
+        """Abre el diálogo de configuración de optimizaciones."""
+        new_cfg = _show_opt_dialog(self.text.winfo_toplevel(), self._opt_config)
+        if new_cfg is not None:
+            self._opt_config = new_cfg
+            # Confirmación breve en consola
+            activas = [k for k, v in new_cfg.items() if v and k != "factor"]
+            self._write(
+                "Configuración de optimizaciones actualizada:\n\n" +
+                "\n".join(f"  • {k}" for k in activas) +
+                (f"\n  • factor de unrolling: {new_cfg['factor']}" if new_cfg.get("unroll") else "")
+            )
 
 
 
@@ -62,7 +185,7 @@ class CompilerMenu:
         self._cancel_debounce()
         source = self.text.get("1.0", END)
         self.clear_errors()
-        result = compile_source(source)
+        result = compile_source(source, opt_config=self._opt_config)
         self._mode = "compile"
 
         if result["success"]:
@@ -95,7 +218,7 @@ class CompilerMenu:
         self._cancel_debounce()
         source = self.text.get("1.0", END)
         self.clear_errors()
-        result = compile_source(source)
+        result = compile_source(source, opt_config=self._opt_config)
         self._mode = "compile"
 
         if not result["success"]:
@@ -259,17 +382,20 @@ def main(root, text, console, menubar, on_content_change=None, file_obj=None):
 
     m = Menu(menubar, tearoff=0, bg="#161B22", fg="white",
              activebackground="#000000", activeforeground="white")
-    m.add_command(label="Compilar",         command=obj.compile_code,   accelerator="F5")
-    m.add_command(label="Compilar a .mem",  command=obj.compile_to_mem, accelerator="F7")
+    m.add_command(label="Compilar",                 command=obj.compile_code,     accelerator="F5")
+    m.add_command(label="Compilar a .mem",          command=obj.compile_to_mem,   accelerator="F7")
     m.add_separator()
-    m.add_command(label="Auto-corregir",    command=obj.autofix_code,   accelerator="F6")
-    m.add_command(label="Limpiar marcas",   command=obj.clear_errors)
+    m.add_command(label="Configurar optimizaciones...", command=obj.open_opt_dialog, accelerator="F8")
+    m.add_separator()
+    m.add_command(label="Auto-corregir",            command=obj.autofix_code,     accelerator="F6")
+    m.add_command(label="Limpiar marcas",           command=obj.clear_errors)
     menubar.add_cascade(label="Compilador", menu=m)
 
     # atajos de teclado
     root.bind("<F5>", lambda e: obj.compile_code())
     root.bind("<F6>", lambda e: obj.autofix_code())
     root.bind("<F7>", lambda e: obj.compile_to_mem())
+    root.bind("<F8>", lambda e: obj.open_opt_dialog())
     root.config(menu=menubar)
 
     text.bind("<KeyRelease>", lambda e: obj.schedule_live_check(), add="+")
