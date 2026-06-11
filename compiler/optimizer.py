@@ -8,6 +8,7 @@ class OptStats:
         self.unrolled_loops = 0
         self.unrolled_iterations = 0
         self.renamed = 0
+        self.reordered = 0
         self.instr_before = 0
         self.instr_after = 0
 
@@ -35,6 +36,7 @@ class OptStats:
             f"  Loops desenrollados    : {self.unrolled_loops}",
             f"  Iteraciones extra      : {self.unrolled_iterations}",
             f"  Temporales renombrados : {self.renamed}",
+            f"  Instrucciones reordenadas: {self.reordered}",
         ])
 
 
@@ -422,17 +424,16 @@ def register_renaming(lines: List[str],
 
     return result
 
-# Funcion principal de eliminación de código muerto
 def dead_code_elimination(lines: List[str],
                            stats: OptStats = None) -> List[str]:
     """Eliminación de código muerto usando análisis de liveness hacia atrás.
 
     Raíces de liveness (variables siempre vivas):
-      - Instrucciones save(x)    -> x es observable
-      - return <val>             -> val es observable
-      - param <val>              -> val es observable (argumento de llamada)
-      - Asignaciones a arreglos  -> base e índice son observables
-      - Llamadas a función       -> sus argumentos son observables
+      - Instrucciones save(x)    → x es observable
+      - return <val>             → val es observable
+      - param <val>              → val es observable (argumento de llamada)
+      - Asignaciones a arreglos  → base e índice son observables
+      - Llamadas a función       → sus argumentos son observables
 
     Algoritmo (backward):
       1. Recolectar conjunto inicial de variables vivas (roots).
@@ -447,7 +448,7 @@ def dead_code_elimination(lines: List[str],
         """Extrae los identificadores usados en el lado derecho de una instrucción."""
         s = instr.strip()
 
-        # save x  ->  x es usada
+        # save x  →  x es usada
         m = re.match(r'^save\s+(\w+)', s)
         if m:
             return [m.group(1)]
@@ -566,6 +567,175 @@ def dead_code_elimination(lines: List[str],
 
 
 
+def instruction_reordering(lines: List[str],
+                            stats: OptStats = None) -> List[str]:
+    """Reordenamiento de instrucciones dentro de bloques básicos.
+
+    Respeta dependencias de datos:
+      - RAW (Read After Write): si B lee una variable que A escribe, B debe ir después de A.
+      - WAR (Write After Read): si B escribe una variable que A lee, B debe ir después de A.
+      - WAW (Write After Write): si B escribe lo mismo que A, B debe ir después de A.
+
+    También respeta dependencias de control:
+      - Ninguna instrucción puede moverse fuera de su bloque básico.
+      - Las instrucciones de salto, return, param y call mantienen su posición relativa.
+
+    Algoritmo: list scheduling (greedy topológico).
+      1. Dividir en bloques básicos.
+      2. Dentro de cada bloque, construir un grafo de dependencias.
+      3. Emitir instrucciones en orden topológico, priorizando
+         las que tienen más dependientes (heurística de ruta crítica).
+    """
+
+    def _get_uses(s: str) -> set:
+        """Variables leídas por la instrucción."""
+        if not s or s.endswith(':') or s.startswith('#') or s.startswith('LOOP_'):
+            return set()
+        # param, return, save, if, iffalse, goto — leer sus operandos
+        for prefix in ('param ', 'return ', 'save ', 'if ', 'iffalse ', 'goto '):
+            if s.startswith(prefix):
+                return {t for t in re.findall(r'[a-zA-Z_]\w*', s[len(prefix):])
+                        if _is_var(t)}
+        # t = call func, N  →  solo el nombre de la función como uso simbólico
+        m = re.match(r'^\w[\w.]*\s*=\s*call\s+(\w[\w.]*)', s)
+        if m:
+            return {m.group(1)} if _is_var(m.group(1)) else set()
+        # arr[idx] = val
+        m = re.match(r'^(\w+)\[(.+?)\]\s*=\s*(.+)$', s)
+        if m:
+            uses = set()
+            for part in [m.group(1), m.group(2), m.group(3)]:
+                uses |= {t for t in re.findall(r'[a-zA-Z_]\w*', part) if _is_var(t)}
+            return uses
+        # var = expr  →  leer RHS
+        if '=' in s:
+            rhs = s.split('=', 1)[1]
+            return {t for t in re.findall(r'[a-zA-Z_]\w*', rhs) if _is_var(t)}
+        return set()
+
+    def _get_def(s: str):
+        """Variable escrita por la instrucción (None si no define nada)."""
+        return get_def(s)
+
+    def _is_fixed(s: str) -> bool:
+        """True si la instrucción NO puede moverse (ancla del bloque)."""
+        if not s or s.endswith(':') or s.startswith('#') or s.startswith('LOOP_'):
+            return True
+        for prefix in ('goto', 'if ', 'iffalse', 'return', 'param',
+                       'call ', 'begin_func', 'end_func', 'fparam', 'save'):
+            if s.startswith(prefix):
+                return True
+        # Escritura a memoria: mem[x] = y o arr[i] = v
+        if re.match(r'^\w+\[', s):
+            return True
+        return False
+
+    def _reorder_block(block: List[str]) -> List[str]:
+        """Reordena un bloque básico con list scheduling."""
+        if len(block) <= 1:
+            return block
+
+        n = len(block)
+        stripped = [l.strip() for l in block]
+
+        # Construir grafo de dependencias: deps[i] = set de índices que i debe esperar
+        deps = [set() for _ in range(n)]
+
+        for i in range(n):
+            def_i   = _get_def(stripped[i])
+            uses_i  = _get_uses(stripped[i])
+            fixed_i = _is_fixed(stripped[i])
+
+            for j in range(i + 1, n):
+                def_j   = _get_def(stripped[j])
+                uses_j  = _get_uses(stripped[j])
+                fixed_j = _is_fixed(stripped[j])
+
+                # Si cualquiera es fija, mantener orden relativo
+                if fixed_i or fixed_j:
+                    deps[j].add(i)
+                    continue
+
+                # RAW: j lee lo que i escribe
+                if def_i and def_i in uses_j:
+                    deps[j].add(i)
+
+                # WAR: j escribe lo que i lee
+                if def_j and def_j in uses_i:
+                    deps[j].add(i)
+
+                # WAW: ambos escriben la misma variable
+                if def_i and def_j and def_i == def_j:
+                    deps[j].add(i)
+
+        # Calcular número de dependientes de cada nodo (para priorizar)
+        dependents = [0] * n
+        for j in range(n):
+            for i in deps[j]:
+                dependents[i] += 1
+
+        # List scheduling: emitir instrucciones listas (sin deps pendientes)
+        # priorizando las de mayor número de dependientes
+        emitted  = [False] * n
+        result   = []
+        pending  = set(range(n))
+
+        while pending:
+            # Instrucciones listas: todas sus dependencias ya emitidas
+            ready = [i for i in pending
+                     if all(emitted[d] for d in deps[i])]
+
+            if not ready:
+                # Ciclo en el grafo (no debería pasar con IR bien formado)
+                # Emitir el primero pendiente para no bloquearse
+                ready = [min(pending)]
+
+            # Priorizar: mayor número de dependientes primero
+            chosen = max(ready, key=lambda i: dependents[i])
+
+            result.append(block[chosen])
+            emitted[chosen] = True
+            pending.discard(chosen)
+
+        return result
+
+    # ── Dividir en bloques básicos y reordenar cada uno ───────────────────
+    result       = []
+    current_block = []
+
+    def _flush():
+        if current_block:
+            result.extend(_reorder_block(current_block))
+            current_block.clear()
+
+    for line in lines:
+        s = line.strip()
+
+        # Inicio de bloque básico: etiqueta
+        if s.endswith(':') and not s.startswith('#') and not s.startswith('LOOP_'):
+            _flush()
+            result.append(line)
+            continue
+
+        # Fin de bloque básico: salto o return
+        if (s.startswith('goto') or s.startswith('if ') or s.startswith('iffalse')
+                or s.startswith('return') or s.startswith('end_func')):
+            current_block.append(line)
+            _flush()
+            continue
+
+        current_block.append(line)
+
+    _flush()
+
+    if stats:
+        reordered = sum(
+            1 for orig, new in zip(lines, result) if orig != new
+        )
+
+    return result
+
+
 def optimize(ir_code: str,
              unroll_factor: int = 4,
              total_unroll: bool = False,
@@ -599,6 +769,11 @@ def optimize(ir_code: str,
             lines,
             stats=stats
         )
+
+    if enable_reorder:
+        before_reorder = list(lines)
+        lines = instruction_reordering(lines, stats=stats)
+        stats.reordered = sum(1 for a, b in zip(before_reorder, lines) if a != b)
 
     stats.instr_after = stats._count_instrs(lines)
 
