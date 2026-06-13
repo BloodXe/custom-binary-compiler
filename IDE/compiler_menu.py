@@ -153,6 +153,7 @@ class CompilerMenu:
         self._mode      = "ready" # ready | live | compile | autofix
         self._debounce  = None    # id del after() pendiente para live_check
         self._opt_config = dict(_DEFAULT_OPT)  # configuración de optimizaciones activa
+        self._last_cfg_json = None              # JSON del CFG del último compile exitoso
 
     def open_opt_dialog(self):
         """Abre el diálogo de configuración de optimizaciones."""
@@ -166,6 +167,28 @@ class CompilerMenu:
                 "\n".join(f"  • {k}" for k in activas) +
                 (f"\n  • factor de unrolling: {new_cfg['factor']}" if new_cfg.get("unroll") else "")
             )
+
+    def export_cfg_json(self):
+        """Exporta el JSON del CFG al disco para visualización web."""
+        from tkinter.filedialog import asksaveasfilename
+
+        if not self._last_cfg_json:
+            self._write("No hay CFG disponible. Compilá primero (F5).")
+            return
+
+        path = asksaveasfilename(
+            title="Exportar CFG como JSON",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("Todos", "*.*")],
+            initialfile="cfg.json",
+        )
+        if not path:
+            return
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self._last_cfg_json)
+
+        self._write(f"CFG exportado a:\n{path}\n\nAbrilo en el visualizador web para ver el grafo.")
 
 
 
@@ -189,11 +212,16 @@ class CompilerMenu:
         self._mode = "compile"
 
         if result["success"]:
+            # Guardar el JSON del CFG para poder exportarlo después
+            self._last_cfg_json = result.get("cfg_json")
+
             out = "Compilación exitosa.\n\n"
             if result.get("ir"):
                 out += "=== REPRESENTACIÓN INTERMEDIA ===\n\n" + result["ir"] + "\n\n"
             if result.get("blocks"):
                 out += "=== BLOQUES BÁSICOS ===\n\n" + result["blocks"] + "\n\n"
+            if result.get("cfg_summary"):
+                out += "=== CFG (Control Flow Graph) ===\n\n" + result["cfg_summary"] + "\n\n"
             if result.get("optimization"):
                 out += "=== OPTIMIZACIÓN ===\n\n" + result["optimization"] + "\n\n"
             if result.get("stats"):
@@ -386,6 +414,7 @@ def main(root, text, console, menubar, on_content_change=None, file_obj=None):
     m.add_command(label="Compilar a .mem",          command=obj.compile_to_mem,   accelerator="F7")
     m.add_separator()
     m.add_command(label="Configurar optimizaciones...", command=obj.open_opt_dialog, accelerator="F8")
+    m.add_command(label="Exportar CFG (JSON)...",   command=obj.export_cfg_json,  accelerator="F9")
     m.add_separator()
     m.add_command(label="Auto-corregir",            command=obj.autofix_code,     accelerator="F6")
     m.add_command(label="Limpiar marcas",           command=obj.clear_errors)
@@ -396,6 +425,7 @@ def main(root, text, console, menubar, on_content_change=None, file_obj=None):
     root.bind("<F6>", lambda e: obj.autofix_code())
     root.bind("<F7>", lambda e: obj.compile_to_mem())
     root.bind("<F8>", lambda e: obj.open_opt_dialog())
+    root.bind("<F9>", lambda e: obj.export_cfg_json())
     root.config(menu=menubar)
 
     text.bind("<KeyRelease>", lambda e: obj.schedule_live_check(), add="+")
