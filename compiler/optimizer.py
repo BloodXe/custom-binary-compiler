@@ -567,8 +567,245 @@ def dead_code_elimination(lines: List[str],
 
 
 
-def instruction_reordering(lines: List[str],
-                            stats: OptStats = None) -> List[str]:
+def cfg_dead_code_elimination(ir_code: str,
+                               stats: OptStats = None) -> str:
+    """Eliminación de código muerto usando el CFG.
+
+    Mejoras sobre el DCE lineal:
+      1. Elimina bloques inalcanzables (nodos sin predecesores excepto el primero
+         de cada función) — los nodos "flotando" en el CFG.
+      2. Calcula live_in / live_out por bloque usando las aristas del CFG,
+         lo que permite ser más preciso en código con ramas.
+
+    Algoritmo:
+      Fase 1 — Bloques inalcanzables:
+        - Construir el CFG
+        - Marcar como inalcanzable todo nodo sin predecesores que no sea
+          el primero de su función
+        - Eliminar las instrucciones de esos bloques del IR
+
+      Fase 2 — Liveness por bloque (dataflow equations):
+        live_out[B] = ∪ live_in[S]  para todo sucesor S de B
+        live_in[B]  = uses[B] ∪ (live_out[B] - defs[B])
+        Iterar hasta punto fijo.
+
+      Fase 3 — Eliminar instrucciones muertas dentro de cada bloque
+        usando live_out del bloque como conjunto inicial de variables vivas.
+    """
+    from compiler.cfg import build_cfg
+    from compiler.basic_blocks import build_basic_blocks
+
+    lines = ir_code.splitlines()
+
+    # ── Fase 1: eliminar bloques inalcanzables ────────────────────────────
+    cfg = build_cfg(ir_code)
+    blocks = build_basic_blocks(ir_code)
+
+    # Encontrar entry points — primer bloque de cada función
+    func_entries = set()
+    seen_funcs   = set()
+    for block in blocks:
+        for instr in block.lineas:
+            s = instr.strip()
+            m = re.match(r'^begin_func\s+(\w+)', s)
+            if m and m.group(1) not in seen_funcs:
+                func_entries.add(block.name)
+                seen_funcs.add(m.group(1))
+                break
+    # El primer bloque global siempre es entry
+    if blocks:
+        func_entries.add(blocks[0].name)
+
+    # BFS/DFS desde cada entry para marcar alcanzables
+    reachable = set()
+    stack = list(func_entries)
+    while stack:
+        bid = stack.pop()
+        if bid in reachable:
+            continue
+        reachable.add(bid)
+        node = cfg.nodes.get(bid)
+        if node:
+            for edge in node.succs:
+                if edge.dst not in reachable:
+                    stack.append(edge.dst)
+
+    # Bloques inalcanzables
+    unreachable = set(cfg.nodes.keys()) - reachable
+
+    # Instrucciones de bloques inalcanzables a eliminar
+    unreachable_instrs = set()
+    for block in blocks:
+        if block.name in unreachable:
+            for instr in block.lineas:
+                unreachable_instrs.add(instr.strip())
+
+    # Filtrar líneas inalcanzables del IR
+    filtered_lines = []
+    for line in lines:
+        s = line.strip()
+        if s in unreachable_instrs:
+            continue
+        filtered_lines.append(line)
+
+    if not filtered_lines:
+        filtered_lines = lines
+
+    # ── Fase 2: liveness por bloque (dataflow) ────────────────────────────
+    # Reconstruir CFG y bloques desde el IR filtrado
+    filtered_ir = "\n".join(filtered_lines)
+    cfg2 = build_cfg(filtered_ir)
+    blocks2 = build_basic_blocks(filtered_ir)
+
+    # Para cada bloque calcular uses y defs
+    def _block_uses_defs(block_lines):
+        """uses: vars leídas antes de ser escritas. defs: vars escritas."""
+        uses = set()
+        defs = set()
+        for instr in block_lines:
+            s = instr.strip()
+            # Variables usadas en el lado derecho
+            rhs_vars = set()
+            if s.startswith('save '):
+                m = re.match(r'^save\s+(\w+)', s)
+                if m: rhs_vars.add(m.group(1))
+            elif s.startswith('return '):
+                m = re.match(r'^return\s+(.+)$', s)
+                if m: rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', m.group(1)) if _is_var(t)}
+            elif s.startswith('param '):
+                m = re.match(r'^param\s+(.+)$', s)
+                if m: rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', m.group(1)) if _is_var(t)}
+            elif s.startswith('if ') or s.startswith('iffalse ') or s.startswith('goto '):
+                rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', s) if _is_var(t)}
+            # mem[addr] = val → addr y val son usadas
+            elif re.match(r'^mem\[', s):
+                rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', s) if _is_var(t)}
+            # arr[idx] = val → arr, idx y val son usadas
+            elif re.match(r'^\w+\[', s):
+                rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', s) if _is_var(t)}
+            # t = arr[idx] → arr e idx son usadas
+            elif re.match(r'^\w+\s*=\s*\w+\[', s):
+                rhs = s.split('=', 1)[1]
+                rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', rhs) if _is_var(t)}
+            elif '=' in s and not s.endswith(':'):
+                rhs = s.split('=', 1)[1]
+                rhs_vars = {t for t in re.findall(r'[a-zA-Z_]\w*', rhs) if _is_var(t)}
+
+            # Vars usadas antes de ser definidas → uses del bloque
+            uses |= (rhs_vars - defs)
+
+            # Variable definida — no definir para mem[] ni arr[] (son escrituras a memoria)
+            if not re.match(r'^mem\[', s) and not re.match(r'^\w+\[', s):
+                defined = get_def(s)
+                if defined:
+                    defs.add(defined)
+
+        return uses, defs
+
+    block_uses  = {}
+    block_defs  = {}
+    block_map   = {b.name: b for b in blocks2}
+
+    for b in blocks2:
+        u, d = _block_uses_defs(b.lineas)
+        block_uses[b.name] = u
+        block_defs[b.name] = d
+
+    # Inicializar live_in y live_out
+    live_in  = {b.name: set() for b in blocks2}
+    live_out = {b.name: set() for b in blocks2}
+
+    # Iterar hasta punto fijo
+    changed = True
+    while changed:
+        changed = False
+        for b in reversed(blocks2):
+            bid = b.name
+            node = cfg2.nodes.get(bid)
+            if not node:
+                continue
+
+            # live_out[B] = union de live_in de sucesores
+            new_out = set()
+            for edge in node.succs:
+                new_out |= live_in.get(edge.dst, set())
+
+            # live_in[B] = uses[B] union (live_out[B] - defs[B])
+            new_in = block_uses[bid] | (new_out - block_defs[bid])
+
+            if new_out != live_out[bid] or new_in != live_in[bid]:
+                live_out[bid] = new_out
+                live_in[bid]  = new_in
+                changed = True
+
+    # ── Fase 3: eliminar instrucciones muertas por bloque ─────────────────
+    result_lines = []
+
+    for b in blocks2:
+        bid = b.name
+        # Empezar con live_out del bloque como conjunto de vivas
+        live = set(live_out.get(bid, set()))
+
+        # También agregar raíces globales (save, return con valor)
+        for instr in b.lineas:
+            s = instr.strip()
+            m = re.match(r'^save\s+(\w+)', s)
+            if m: live.add(m.group(1))
+            m = re.match(r'^return\s+([a-zA-Z_]\w*)', s)
+            if m and _is_var(m.group(1)): live.add(m.group(1))
+
+        # Recorrer el bloque de abajo hacia arriba
+        kept_block = [True] * len(b.lineas)
+
+        for idx in range(len(b.lineas) - 1, -1, -1):
+            instr = b.lineas[idx]
+            s = instr.strip()
+
+            # Instrucciones no eliminables
+            if (not s or s.endswith(':') or s.startswith('#') or
+                    s.startswith('LOOP_') or s.startswith('goto') or
+                    s.startswith('if') or s.startswith('iffalse') or
+                    s.startswith('return') or s.startswith('param') or
+                    s.startswith('save') or s.startswith('begin_func') or
+                    s.startswith('end_func') or s.startswith('fparam') or
+                    re.match(r'^mem\[', s) or re.match(r'^\w+\[', s) or
+                    re.match(r'^call\s+', s)):
+                # Agregar TODAS las variables mencionadas a live
+                for v in re.findall(r'[a-zA-Z_]\w*', s):
+                    if _is_var(v): live.add(v)
+                continue
+            defined = get_def(s)
+            if defined and defined not in live:
+                kept_block[idx] = False
+            else:
+                if defined:
+                    live.discard(defined)
+                rhs = s.split('=', 1)[1] if '=' in s else s
+                for v in re.findall(r'[a-zA-Z_]\w*', rhs):
+                    if _is_var(v): live.add(v)
+
+        for idx, instr in enumerate(b.lineas):
+            if kept_block[idx]:
+                result_lines.append(instr)
+
+    result_ir = "\n".join(result_lines)
+
+    if stats:
+        orig_count   = sum(1 for l in filtered_lines
+                          if l.strip() and not l.strip().endswith(':')
+                          and not l.strip().startswith('#')
+                          and not l.strip().startswith('LOOP_'))
+        result_count = sum(1 for l in result_lines
+                          if l.strip() and not l.strip().endswith(':')
+                          and not l.strip().startswith('#')
+                          and not l.strip().startswith('LOOP_'))
+        eliminated_unreachable = len(unreachable)
+
+    return result_ir
+
+
+
+def instruction_reordering(lines: List[str], stats: OptStats = None) -> List[str]:
     """Reordenamiento de instrucciones dentro de bloques básicos.
 
     Respeta dependencias de datos:
@@ -765,10 +1002,11 @@ def optimize(ir_code: str,
         )
 
     if enable_dce:
-        lines = dead_code_elimination(
-            lines,
-            stats=stats
-        )
+        # Usar DCE basado en CFG — elimina bloques inalcanzables y hace
+        # liveness por bloque usando las aristas del grafo de flujo
+        ir_optimized = "\n".join(lines)
+        ir_optimized = cfg_dead_code_elimination(ir_optimized, stats=stats)
+        lines = ir_optimized.splitlines()
 
     if enable_reorder:
         before_reorder = list(lines)

@@ -153,7 +153,8 @@ class CompilerMenu:
         self._mode      = "ready" # ready | live | compile | autofix
         self._debounce  = None    # id del after() pendiente para live_check
         self._opt_config = dict(_DEFAULT_OPT)  # configuración de optimizaciones activa
-        self._last_cfg_json = None              # JSON del CFG del último compile exitoso
+        self._last_cfg_json     = None  # JSON del CFG original
+        self._last_cfg_opt_json = None  # JSON del CFG después de optimizaciones
 
     def open_opt_dialog(self):
         """Abre el diálogo de configuración de optimizaciones."""
@@ -169,26 +170,75 @@ class CompilerMenu:
             )
 
     def export_cfg_json(self):
-        """Exporta el JSON del CFG al disco para visualización web."""
+        """Exporta el JSON del CFG al disco — ofrece original u optimizado."""
         from tkinter.filedialog import asksaveasfilename
+        import tkinter as tk
 
-        if not self._last_cfg_json:
+        if not getattr(self, "_last_cfg_json", None):
             self._write("No hay CFG disponible. Compilá primero (F5).")
             return
+
+        # Diálogo para elegir cuál exportar
+        has_opt = bool(getattr(self, "_last_cfg_opt_json", None))
+        if has_opt and self._last_cfg_opt_json != self._last_cfg_json:
+            dlg = tk.Toplevel(self.text.winfo_toplevel())
+            dlg.title("Exportar CFG")
+            dlg.resizable(False, False)
+            dlg.configure(bg="#161B22")
+            dlg.grab_set()
+
+            choice = tk.StringVar(value="opt")
+
+            tk.Label(dlg, text="¿Qué CFG querés exportar?",
+                     bg="#161B22", fg="#C9D1D9",
+                     font=("Consolas", 11)).pack(pady=(14, 6), padx=16)
+
+            tk.Radiobutton(dlg, text="CFG optimizado (sin bloques inalcanzables)",
+                           variable=choice, value="opt",
+                           bg="#161B22", fg="#7EE787",
+                           selectcolor="#0D1117",
+                           font=("Consolas", 10)).pack(anchor="w", padx=20)
+
+            tk.Radiobutton(dlg, text="CFG original (IR sin optimizar)",
+                           variable=choice, value="orig",
+                           bg="#161B22", fg="#C9D1D9",
+                           selectcolor="#0D1117",
+                           font=("Consolas", 10)).pack(anchor="w", padx=20)
+
+            result = {"ok": False}
+
+            def on_ok():
+                result["ok"] = True
+                dlg.destroy()
+
+            tk.Button(dlg, text="Exportar", command=on_ok,
+                      bg="#238636", fg="white", relief="flat",
+                      font=("Consolas", 10), width=10).pack(pady=(10, 14))
+
+            dlg.wait_window()
+            if not result["ok"]:
+                return
+
+            json_data = (self._last_cfg_opt_json if choice.get() == "opt"
+                         else self._last_cfg_json)
+            default_name = "cfg_optimizado.json" if choice.get() == "opt" else "cfg_original.json"
+        else:
+            json_data    = self._last_cfg_json
+            default_name = "cfg.json"
 
         path = asksaveasfilename(
             title="Exportar CFG como JSON",
             defaultextension=".json",
             filetypes=[("JSON", "*.json"), ("Todos", "*.*")],
-            initialfile="cfg.json",
+            initialfile=default_name,
         )
         if not path:
             return
 
         with open(path, "w", encoding="utf-8") as f:
-            f.write(self._last_cfg_json)
+            f.write(json_data)
 
-        self._write(f"CFG exportado a:\n{path}\n\nAbrilo en el visualizador web para ver el grafo.")
+        self._write(f"CFG exportado a:\n{path}\n\nAbrilo en jsoncrack.com para visualizarlo.")
 
 
 
@@ -212,8 +262,9 @@ class CompilerMenu:
         self._mode = "compile"
 
         if result["success"]:
-            # Guardar el JSON del CFG para poder exportarlo después
-            self._last_cfg_json = result.get("cfg_json")
+            # Guardar ambos JSONs del CFG para exportar
+            self._last_cfg_json     = result.get("cfg_json")
+            self._last_cfg_opt_json = result.get("cfg_opt_json")
 
             out = "Compilación exitosa.\n\n"
             if result.get("ir"):
@@ -221,7 +272,9 @@ class CompilerMenu:
             if result.get("blocks"):
                 out += "=== BLOQUES BÁSICOS ===\n\n" + result["blocks"] + "\n\n"
             if result.get("cfg_summary"):
-                out += "=== CFG (Control Flow Graph) ===\n\n" + result["cfg_summary"] + "\n\n"
+                out += "=== CFG ORIGINAL ===\n\n" + result["cfg_summary"] + "\n\n"
+            if result.get("cfg_opt_summary") and result.get("cfg_opt_summary") != result.get("cfg_summary"):
+                out += "=== CFG OPTIMIZADO ===\n\n" + result["cfg_opt_summary"] + "\n\n"
             if result.get("optimization"):
                 out += "=== OPTIMIZACIÓN ===\n\n" + result["optimization"] + "\n\n"
             if result.get("stats"):
