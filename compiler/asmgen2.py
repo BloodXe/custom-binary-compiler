@@ -29,9 +29,14 @@ _RE_GOTO        = re.compile(r'^goto\s+(\w+)$')
 _RE_IF          = re.compile(r'^if\s+(.+)\s+goto\s+(\w+)$')
 _RE_IFFALSE     = re.compile(r'^iffalse\s+(.+)\s+goto\s+(\w+)$')
 _RE_ALLOC       = re.compile(r'^(\w[\w.]*)\s*=\s*alloc\s+(\d+)$')
-_RE_ARRAY_SET   = re.compile(r'^(\w[\w.]*)\[(\d+)\]\s*=\s*(.+)$')
+_RE_ARRAY_GET   = re.compile(r'^(\w[\w.]*)\s*=\s*(\w[\w.]*)\[(.+)\]$')   # t = arr[idx]
+_RE_ARRAY_SET   = re.compile(r'^(\w[\w.]*)\[(.+)\]\s*=\s*(.+)$')          # arr[idx] = val
 _RE_MEM_SET     = re.compile(r'^mem\[(.+)\]\s*=\s*(.+)$')
-_RE_BINOP       = re.compile(r'^(\w[\w.]*)\s*=\s*(.+?)\s*([+\-*/%<>|&^]|==|!=|<=|>=|<<|>>|\*\*)\s*(.+)$')
+# BINOP: los operadores de dos chars (<=, >=, ==, !=, <<, >>, **) deben ir ANTES
+# que los de un char para que el regex no parta <= en < y = 1
+_RE_BINOP = re.compile(
+    r'^(\w[\w.]*)\s*=\s*(.+?)\s*(==|!=|<=|>=|<<|>>|\*\*|[+\-*/%<>|&^])\s*(.+)$'
+)
 _RE_ASSIGN      = re.compile(r'^(\w[\w.]*)\s*=\s*(.+)$')
 _RE_SAVE        = re.compile(r'^save\s+(\w+)$')
 _RE_COMMENT     = re.compile(r'^#')
@@ -201,8 +206,11 @@ class AsmGen2:
         m = _RE_MEM_SET.match(s)
         if m: return self._on_mem_set(m.group(1), m.group(2))
 
+        m = _RE_ARRAY_GET.match(s)
+        if m: return self._on_array_get(m.group(1), m.group(2), m.group(3))
+
         m = _RE_ARRAY_SET.match(s)
-        if m: return self._on_array_set(m.group(1), int(m.group(2)), m.group(3))
+        if m: return self._on_array_set(m.group(1), m.group(2), m.group(3))
 
         m = _RE_ALLOC.match(s)
         if m: return self._on_alloc(m.group(1), int(m.group(2)))
@@ -240,8 +248,18 @@ class AsmGen2:
         self._frame_sz = 0
 
     def _on_fparam(self, name):
-        """Registra un parámetro formal de la función."""
+        """Registra un parámetro formal de la función.
+        Los primeros 4 van en r4-r7. Los extras se spill al stack.
+        """
+        idx = len(self._params)
         self._params.append(name)
+        # Si hay más de 4 params, el llamador los puso en el stack
+        # los registramos como locales para que _load_value los encuentre
+        if idx >= len(ARG_REGS):
+            # El llamador empuja extras en el stack antes del jal
+            # offset relativo al frame actual (se actualiza con _adjust_locals)
+            spill_offset = (idx - len(ARG_REGS)) * WORD
+            self._locals[name] = spill_offset
 
     # ─────────────────────────────────────────────────────────────────────
     #  Llamadas a función
@@ -285,9 +303,30 @@ class AsmGen2:
 
     def _on_return(self, val):
         if val is not None:
-            r = self._load_value(val)
-            self._emit(f"add r4, {r}, r0")
-            self._free_if_temp(r)
+            val = val.strip()
+            # Si el valor es una expresión binaria (ej: n * r, a + b)
+            m = re.match(
+                r'^(.+?)\s*(==|!=|<=|>=|<<|>>|\*\*|[+\-*/%<>|&^])\s*(.+)$',
+                val
+            )
+            if m:
+                left  = m.group(1).strip()
+                op    = m.group(2)
+                right = m.group(3).strip()
+                # Usar temporal interno para calcular la expresión
+                tmp = "__ret_tmp__"
+                self._on_binop(tmp, left, op, right)
+                r = self._load_value(tmp)
+                self._emit(f"add r4, {r}, r0")
+                self._free_if_temp(r)
+                # Limpiar el temporal del frame
+                if tmp in self._locals:
+                    del self._locals[tmp]
+                    self._frame_sz -= WORD
+            else:
+                r = self._load_value(val)
+                self._emit(f"add r4, {r}, r0")
+                self._free_if_temp(r)
         if self._frame_sz > 0:
             self._emit(f"addi r2, r2, {self._frame_sz}")
         self._emit("jr r1")
@@ -442,19 +481,71 @@ class AsmGen2:
         self._locals[dest] = 0
         self._frame_sz    += bytes_
 
-    def _on_array_set(self, arr, idx, val):
+    def _on_array_get(self, dest, arr, idx_expr):
+        """t = arr[idx]  →  load desde base + idx*4."""
+        r_base = self._addr_of(arr)
+        try:
+            idx = int(idx_expr)
+            r   = self._alloc()
+            self._emit(f"load {r}, {idx * WORD}({r_base})")
+            self._free_if_temp(r_base)
+        except ValueError:
+            # Índice variable: usar r3 como contador, r como acumulador de offset
+            r_idx = self._load_value(idx_expr)
+            r     = self._alloc()
+            n = self._lbl_count; self._lbl_count += 1
+            lloop = f"idx_loop_{n}"; lend = f"idx_end_{n}"
+            self._emit(f"add  r3, {r_idx}, r0")   # r3 = idx (contador)
+            self._free_if_temp(r_idx)
+            self._emit(f"addi {r}, r0, 0")         # r = 0 (acum offset)
+            self._emit_label(lloop)
+            self._emit(f"beq  r3, r0, {lend}")
+            self._emit(f"addi {r}, {r}, {WORD}")
+            self._emit(f"addi r3, r3, -1")
+            self._emit(f"jal  r0, {lloop}")
+            self._emit_label(lend)
+            self._emit(f"add  {r_base}, {r_base}, {r}")
+            self._emit(f"load {r}, 0({r_base})")
+            self._free_if_temp(r_base)
+        self._store_var(dest, r)
+        self._free_if_temp(r)
+
+    def _on_array_set(self, arr, idx_expr, val):
         """arr[idx] = val  →  store en base + idx*4."""
         r_val  = self._load_value(val)
         r_base = self._addr_of(arr)
-        if idx == 0:
-            self._emit(f"store {r_val}, 0({r_base})")
-        else:
-            r_off = self._load_immediate(idx * WORD)
-            r_dst = self._alloc()
-            self._emit(f"add {r_dst}, {r_base}, {r_off}")
-            self._emit(f"store {r_val}, 0({r_dst})")
+        try:
+            idx = int(idx_expr)
+            if idx == 0:
+                self._emit(f"store {r_val}, 0({r_base})")
+            else:
+                r_off = self._load_immediate(idx * WORD)
+                r_dst = self._alloc()
+                self._emit(f"add {r_dst}, {r_base}, {r_off}")
+                self._emit(f"store {r_val}, 0({r_dst})")
+                self._free_if_temp(r_off)
+                self._free_if_temp(r_dst)
+        except ValueError:
+            # Índice variable
+            r_idx  = self._load_value(idx_expr)
+            r_off  = self._alloc()
+            r_addr = self._alloc()
+            self._emit(f"addi {r_off}, r0, {WORD}")
+            self._emit(f"add  r3, {r_idx}, r0")
+            n = self._lbl_count; self._lbl_count += 1
+            lloop = f"sidx_loop_{n}"; lend = f"sidx_end_{n}"
+            self._emit(f"add  {r_addr}, r0, r0")
+            self._emit_label(lloop)
+            self._emit(f"beq  r3, r0, {lend}")
+            self._emit(f"add  {r_addr}, {r_addr}, {r_off}")
+            self._emit(f"addi r3, r3, -1")
+            self._emit(f"jal  r0, {lloop}")
+            self._emit_label(lend)
+            self._emit(f"add  {r_addr}, {r_base}, {r_addr}")
+            self._emit(f"store {r_val}, 0({r_addr})")
+            self._free_if_temp(r_idx)
             self._free_if_temp(r_off)
-            self._free_if_temp(r_dst)
+            self._free_if_temp(r_addr)
         self._free_if_temp(r_val)
         self._free_if_temp(r_base)
 
@@ -498,9 +589,10 @@ class AsmGen2:
         # Parámetro formal de la función actual
         if t in self._params:
             idx = self._params.index(t)
-            r   = self._alloc()
-            self._emit(f"add {r}, {ARG_REGS[idx]}, r0")
-            return r
+            if idx < len(ARG_REGS):
+                r   = self._alloc()
+                self._emit(f"add {r}, {ARG_REGS[idx]}, r0")
+                return r
 
         # Variable local
         if t in self._locals:

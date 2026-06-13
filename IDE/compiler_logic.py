@@ -13,6 +13,7 @@ from compiler.resolver import Resolver
 from compiler.binary_gen import BinaryGen
 from compiler.IRGen import IRGen
 from compiler.basic_blocks import build_basic_blocks, format_blocks
+from compiler.cfg import build_cfg
 
 
 # Para extraer linea y columna de mensajes de error
@@ -55,7 +56,7 @@ def _resultado_error(fase, mensaje, errores=None):
     }
 
 #crea el diccionario de resultado cuando todo sale bien
-def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None, optimization=None, stats=None):
+def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None, optimization=None, stats=None, cfg_json=None, cfg_summary=None, cfg_opt_json=None, cfg_opt_summary=None):
 
     return {
         "success": True,
@@ -64,6 +65,10 @@ def _resultado_exito(asm_code, resolved_asm, ir_code=None, blocks_code=None, opt
         "errors": [],
         "ir": ir_code,
         "blocks": blocks_code,
+        "cfg_json": cfg_json,
+        "cfg_summary": cfg_summary,
+        "cfg_opt_json": cfg_opt_json,
+        "cfg_opt_summary": cfg_opt_summary,
         "asm": asm_code,
         "resolved_asm": resolved_asm,
         "optimization": optimization,
@@ -123,6 +128,9 @@ def compile_source(source: str, opt_config: dict = None) -> dict:
         ir_code = IRGen().generate(ast)
         blocks = build_basic_blocks(ir_code)
         blocks_code = format_blocks(blocks)
+        cfg_obj = build_cfg(ir_code)
+        cfg_json = cfg_obj.to_json()
+        cfg_summary = cfg_obj.summary()
     except Exception as e:
         return _resultado_error("ir", str(e))
     
@@ -139,9 +147,16 @@ def compile_source(source: str, opt_config: dict = None) -> dict:
             enable_reorder = cfg.get("reorder", False),
         )
     except Exception as e:
-        return _resultado_error("optimization", str(e))   
-    
-    #FASE 4 y 5 GENERACION DE CODIGO 
+        return _resultado_error("optimization", str(e))
+
+    # CFG optimizado (después del DCE — muestra bloques inalcanzables eliminados)
+    try:
+        cfg_opt_obj     = build_cfg(optimization)
+        cfg_opt_json    = cfg_opt_obj.to_json()
+        cfg_opt_summary = cfg_opt_obj.summary()
+    except Exception:
+        cfg_opt_json    = cfg_json
+        cfg_opt_summary = cfg_summary 
     try:
         # Si hay optimizaciones activas, usar asmgen2 que trabaja sobre el IR optimizado
         any_opt = any([
@@ -157,7 +172,7 @@ def compile_source(source: str, opt_config: dict = None) -> dict:
             asm_code = gen.generate(ast)
         resolver = Resolver(asm_code)
         resolved_asm = resolver.resolve()
-        return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code, optimization, stats)
+        return _resultado_exito(asm_code, resolved_asm, ir_code, blocks_code, optimization, stats, cfg_json, cfg_summary, cfg_opt_json, cfg_opt_summary)
     except Exception as e:
         return _resultado_error("codegen", str(e))
 
