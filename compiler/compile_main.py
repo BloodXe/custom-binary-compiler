@@ -1,18 +1,22 @@
 import os
-import io
-import contextlib
+import sys
 from types import SimpleNamespace
 
-from compiler.lexer      import Lexer
-from compiler.parser     import Parser, ParseError
-from compiler.ast_nodes  import AstNode
-from compiler.semantic   import SemanticAnalyzer
-from compiler.asmgen     import AsmGen
-from compiler.resolver   import Resolver
-from compiler.binary_gen import BinaryGen
+from compiler.lexer       import Lexer
+from compiler.parser      import Parser, ParseError
+from compiler.ast_nodes   import AstNode
+from compiler.semantic    import SemanticAnalyzer
+from compiler.asmgen      import AsmGen
+from compiler.asmgen2     import AsmGen2
+from compiler.resolver    import Resolver
+from compiler.binary_gen  import BinaryGen
+from compiler.IRGen       import IRGen
+from compiler.basic_blocks import build_basic_blocks, format_blocks
+from compiler.cfg         import build_cfg
+from compiler.optimizer   import optimize
 
 
-# Impresión del AST
+# ── Impresión del AST ────────────────────────────────────────────────────────
 
 def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
     """Imprime el AST con formato de árbol usando ramas."""
@@ -24,43 +28,21 @@ def print_ast(node: AstNode, last: bool = True, prefix: str = '') -> None:
         print_ast(child, last=(i == len(children) - 1), prefix=child_prefix)
 
 
-# Carga de archivos con resolución de imports
+# ── Carga de archivos con resolución de imports ───────────────────────────────
 
 def load_with_imports(file: str) -> str:
-    """
-    Carga el archivo principal y todos sus imports recursivamente.
-
-    Para cada módulo importado, renombra sus símbolos globales con
-    el prefijo del módulo:
-        func suma   →   func modulo.suma
-        var x       →   var modulo.x
-        const C     →   const modulo.C
-
-    Esto permite que en el archivo que importa se use:
-        modulo.suma(...)   o   modulo.x
-
-    El lexer reconoce "modulo.suma" como un solo token IDENTIFIER
-    porque soporta puntos en identificadores (ver lexer.py).
-    El semántico los registra con el nombre completo, sin cambios.
-    """
     visited = set()
 
     def _load(f: str, prefix: str = None) -> str:
         f = os.path.abspath(f)
-
         if f in visited:
             return ""
         visited.add(f)
-
         if not os.path.exists(f):
             raise FileNotFoundError(f"Módulo no encontrado: '{f}'")
-
         base_dir = os.path.dirname(f)
-
         with open(f, encoding='utf-8') as fh:
             code = fh.read()
-
-        # Primera pasada: recolectar todos los símbolos declarados en este módulo
         symbols = set()
         if prefix:
             for l in code.splitlines():
@@ -74,12 +56,9 @@ def load_with_imports(file: str) -> str:
                 elif ls2.startswith("const "):
                     sym = ls2.split()[1]
                     symbols.add(sym)
-
         result = []
         for line in code.splitlines():
             ls = line.strip()
-
-            # Detectar 'importar nombre'
             if ls.startswith("importar"):
                 parts = ls.split()
                 if len(parts) < 2:
@@ -89,31 +68,26 @@ def load_with_imports(file: str) -> str:
                 module_path = os.path.join(base_dir, module + ".yeison")
                 result.append(_load(module_path, prefix=module))
             else:
-                # Renombrar referencias internas con el prefijo del módulo
                 if prefix:
                     import re
                     for sym in sorted(symbols, key=len, reverse=True):
-                        pattern = r'(?<!' + re.escape(prefix) + r'\.)\b' + re.escape(sym) + r'\b'
+                        pattern = r'(?<!' + re.escape(prefix) + r'\.)\\b' + re.escape(sym) + r'\\b'
                         line = re.sub(pattern, f'{prefix}.{sym}', line)
                 result.append(line)
-
         return "\n".join(result)
 
-    return _load(file)  # ← llamada al final, dentro de load_with_imports
+    return _load(file)
 
 
-# Pipeline de compilación: fases 1 a 3 (léxico, sintáctico, semántico)
+# ── Pipeline fases 1-3 ────────────────────────────────────────────────────────
 
 def run_phases_1_to_3(source: str, args):
-    """
-    Ejecuta léxico, sintáctico y semántico.
-    Retorna (ast, sem) o llama sys.exit() si hay errores.
-    """
-    # Fase 1: Análisis léxico
+    # Fase 1: léxico
     lexer  = Lexer(source)
     tokens = lexer.tokenize()
 
     if args.lexer:
+        print('\n=== TOKENS ===\n')
         lexer.print_tokens(tokens)
 
     if lexer.errors:
@@ -122,7 +96,7 @@ def run_phases_1_to_3(source: str, args):
             print(f'  Línea {ln}, col {col}: {msg}')
         sys.exit(1)
 
-    # Fase 2: Análisis sintáctico
+    # Fase 2: sintáctico
     try:
         ast = Parser(tokens).parse()
     except ParseError as e:
@@ -130,18 +104,21 @@ def run_phases_1_to_3(source: str, args):
         sys.exit(1)
 
     if args.verbose:
-        print('\n=== ÁRBOL SINTÁCTICO ===\n')
+        print('\n=== ÁRBOL SINTÁCTICO (AST) ===\n')
         print_ast(ast)
 
-    # Fase 3: Análisis semántico
+    # Fase 3: semántico
     sem = SemanticAnalyzer()
     sem.visit(ast)
 
     if args.semantico:
+        print('\n=== TABLA DE SÍMBOLOS ===')
         sem.symbol_table.print_table()
     if args.etiquetas:
+        print('\n=== ETIQUETAS DE SALTO ===')
         sem.print_labels()
     if args.memoria:
+        print('\n=== MAPA DE MEMORIA ===')
         sem.print_memory()
 
     if sem.errors:
@@ -153,7 +130,8 @@ def run_phases_1_to_3(source: str, args):
     return ast, sem
 
 
-# Main
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
     import argparse
 
@@ -162,27 +140,51 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos:
-  python main.py programa.yeison -S          # mostrar ASM generado
-  python main.py programa.yeison -b          # compilar a .bin
-  python main.py programa.yeison -b -x       # compilar a .bin y .hex
-  python main.py programa.yeison -a          # todo (AST, tokens, ASM, binario)
-  python main.py programa.yeison -b -o salida  # binario en salida.bin
-  python main.py programa.asm -A -b          # compilar desde .asm directo
+  python main.py programa.yeison -S              # mostrar ASM
+  python main.py programa.yeison -b              # compilar a .bin
+  python main.py programa.yeison -a              # todo (tokens, AST, IR, CFG, ASM, binario)
+  python main.py programa.yeison -O2 -S          # optimizar y mostrar ASM
+  python main.py programa.yeison -O2 --cfg       # IR + CFG + optimizaciones
+  python main.py programa.yeison -O2 -b -o salida # optimizar y guardar binario
         """
     )
 
-    ap.add_argument('archivo',            help='Archivo fuente .yeison o .asm')
-    ap.add_argument('-v', '--verbose',    action='store_true', help='Mostrar AST')
-    ap.add_argument('-l', '--lexer',      action='store_true', help='Mostrar tokens')
-    ap.add_argument('-s', '--semantico',  action='store_true', help='Mostrar tabla de símbolos')
-    ap.add_argument('-m', '--memoria',    action='store_true', help='Mostrar mapa de memoria')
-    ap.add_argument('-e', '--etiquetas',  action='store_true', help='Mostrar etiquetas de salto')
-    ap.add_argument('-S', '--asm',        action='store_true', help='Mostrar ASM generado y resuelto')
-    ap.add_argument('-b', '--binario',    action='store_true', help='Generar archivo .bin')
-    ap.add_argument('-x', '--hex',        action='store_true', help='Generar hex dump .hex (requiere -b)')
-    ap.add_argument('-o', '--output',     help='Nombre base del archivo de salida (sin extensión)')
-    ap.add_argument('-a', '--all',        action='store_true', help='Activar todos los reportes y generar binario')
-    ap.add_argument('-A', '--from-asm',   action='store_true', help='Compilar desde .asm (saltar fases 1-3)')
+    # Archivo fuente
+    ap.add_argument('archivo',              help='Archivo fuente .yeison o .asm')
+
+    # Reportes de análisis
+    ap.add_argument('-v', '--verbose',      action='store_true', help='Mostrar AST')
+    ap.add_argument('-l', '--lexer',        action='store_true', help='Mostrar tokens')
+    ap.add_argument('-s', '--semantico',    action='store_true', help='Mostrar tabla de símbolos')
+    ap.add_argument('-m', '--memoria',      action='store_true', help='Mostrar mapa de memoria')
+    ap.add_argument('-e', '--etiquetas',    action='store_true', help='Mostrar etiquetas de salto')
+
+    # IR y CFG
+    ap.add_argument('--ir',                 action='store_true', help='Mostrar IR de tres direcciones')
+    ap.add_argument('--bloques',            action='store_true', help='Mostrar bloques básicos')
+    ap.add_argument('--cfg',                action='store_true', help='Mostrar CFG y exportar JSON')
+    ap.add_argument('--cfg-json',           metavar='ARCHIVO',   help='Guardar CFG original en JSON')
+    ap.add_argument('--cfg-opt-json',       metavar='ARCHIVO',   help='Guardar CFG optimizado en JSON')
+
+    # Optimizaciones
+    ap.add_argument('-O0',                  action='store_true', help='Sin optimizaciones')
+    ap.add_argument('-O1',                  action='store_true', help='DCE + renombramiento')
+    ap.add_argument('-O2',                  action='store_true', help='Todo: unroll + rename + DCE + reorder')
+    ap.add_argument('--unroll',             action='store_true', help='Activar loop unrolling')
+    ap.add_argument('--no-unroll',          action='store_true', help='Desactivar loop unrolling')
+    ap.add_argument('--factor',             type=int, default=4, help='Factor de unrolling (default: 4)')
+    ap.add_argument('--dce',                action='store_true', help='Activar DCE')
+    ap.add_argument('--rename',             action='store_true', help='Activar renombramiento')
+    ap.add_argument('--reorder',            action='store_true', help='Activar reordenamiento')
+    ap.add_argument('--stats',              action='store_true', help='Mostrar estadísticas de optimización')
+
+    # Salida
+    ap.add_argument('-S', '--asm',          action='store_true', help='Mostrar ASM generado y resuelto')
+    ap.add_argument('-b', '--binario',      action='store_true', help='Generar archivo .bin')
+    ap.add_argument('-x', '--hex',          action='store_true', help='Generar hex dump .mem')
+    ap.add_argument('-o', '--output',       help='Nombre base del archivo de salida')
+    ap.add_argument('-a', '--all',          action='store_true', help='Activar todos los reportes y generar binario')
+    ap.add_argument('-A', '--from-asm',     action='store_true', help='Compilar desde .asm directo')
 
     args = ap.parse_args()
 
@@ -193,17 +195,46 @@ Ejemplos:
         args.semantico = True
         args.memoria   = True
         args.etiquetas = True
+        args.ir        = True
+        args.bloques   = True
+        args.cfg       = True
+        args.stats     = True
         args.asm       = True
         args.binario   = True
         args.hex       = True
+        setattr(args, 'O2', True)
 
-    # Determinar nombre base de salida
-    if args.output:
-        base_name = args.output
-    else:
-        base_name = os.path.splitext(args.archivo)[0]
+    # Determinar configuración de optimizaciones
+    enable_unroll  = True
+    enable_rename  = True
+    enable_dce     = True
+    enable_reorder = False
+    unroll_factor  = args.factor
 
-    # ── Obtener asm_code: desde .asm directo o desde pipeline normal ──
+    if getattr(args, 'O0', False):
+        enable_unroll = enable_rename = enable_dce = enable_reorder = False
+    elif getattr(args, 'O1', False):
+        enable_unroll  = False
+        enable_reorder = False
+        enable_dce     = True
+        enable_rename  = True
+    elif getattr(args, 'O2', False):
+        enable_unroll  = True
+        enable_rename  = True
+        enable_dce     = True
+        enable_reorder = True
+
+    # Flags individuales tienen prioridad
+    if args.unroll:    enable_unroll  = True
+    if args.no_unroll: enable_unroll  = False
+    if args.dce:       enable_dce     = True
+    if args.rename:    enable_rename  = True
+    if args.reorder:   enable_reorder = True
+
+    # Nombre base de salida
+    base_name = args.output or os.path.splitext(args.archivo)[0]
+
+    # ── Rama .asm directo ────────────────────────────────────────────────────
     if args.from_asm:
         try:
             with open(args.archivo, encoding='utf-8') as f:
@@ -211,56 +242,107 @@ Ejemplos:
         except FileNotFoundError:
             print(f'Error: archivo no encontrado: {args.archivo}')
             return 1
+        if args.asm:
+            print('\n=== ASM ===\n')
+            print(asm_code)
+        resolver     = Resolver(asm_code)
+        resolved_asm = resolver.resolve()
+        if args.asm:
+            print('\n=== ASM RESUELTO ===\n')
+            print(resolved_asm)
+        if args.binario:
+            bg = BinaryGen(resolved_asm)
+            bg.generate(base_name + '.bin',
+                        (base_name + '.mem') if args.hex else None)
+        return 0
+
+    # ── Pipeline normal ──────────────────────────────────────────────────────
+    try:
+        source = load_with_imports(args.archivo)
+    except FileNotFoundError as e:
+        print(f'Error: {e}')
+        return 1
+
+    # Fases 1-3
+    ast, sem = run_phases_1_to_3(source, args)
+
+    # Fase IR + bloques + CFG
+    ir_code = IRGen().generate(ast)
+
+    if args.ir:
+        print('\n=== REPRESENTACIÓN INTERMEDIA (IR) ===\n')
+        print(ir_code)
+
+    blocks = build_basic_blocks(ir_code)
+    if args.bloques:
+        print('\n=== BLOQUES BÁSICOS ===\n')
+        print(format_blocks(blocks))
+
+    cfg_orig = build_cfg(ir_code)
+    if args.cfg:
+        print('\n=== CFG ORIGINAL ===\n')
+        print(cfg_orig.summary())
+
+    if args.cfg_json:
+        with open(args.cfg_json, 'w', encoding='utf-8') as f:
+            f.write(cfg_orig.to_json())
+        print(f'CFG original guardado en: {args.cfg_json}')
+
+    # Optimizaciones
+    any_opt = enable_unroll or enable_rename or enable_dce or enable_reorder
+    opt_ir, opt_stats = optimize(
+        ir_code,
+        enable_unroll  = enable_unroll,
+        unroll_factor  = unroll_factor,
+        enable_rename  = enable_rename,
+        enable_dce     = enable_dce,
+        enable_reorder = enable_reorder,
+    )
+
+    if args.stats:
+        print('\n=== ESTADÍSTICAS DE OPTIMIZACIÓN ===\n')
+        print(opt_stats)
+
+    cfg_opt = build_cfg(opt_ir)
+    if args.cfg:
+        print('\n=== CFG OPTIMIZADO ===\n')
+        print(cfg_opt.summary())
+
+    if args.cfg_opt_json:
+        with open(args.cfg_opt_json, 'w', encoding='utf-8') as f:
+            f.write(cfg_opt.to_json())
+        print(f'CFG optimizado guardado en: {args.cfg_opt_json}')
+
+    # Generación de ASM
+    if any_opt and opt_ir:
+        asm_code = AsmGen2().generate(opt_ir)
     else:
-        # Cargar fuente resolviendo imports
-        try:
-            source = load_with_imports(args.archivo)
-        except FileNotFoundError as e:
-            print(f'Error: {e}')
-            return 1
-
-        # Fases 1-3: léxico, sintáctico, semántico
-        ast, sem = run_phases_1_to_3(source, args)
-
-        # Fase 4: Generación de ensamblador
-        gen      = AsmGen(sem)
-        asm_code = gen.generate(ast)
-
-    # ── Desde aquí igual para ambas ramas ──
+        asm_code = AsmGen(sem).generate(ast)
 
     if args.asm:
         print('\n=== ASM GENERADO ===\n')
         print(asm_code)
 
-    # Fase 5: Resolución de referencias (etiquetas → offsets numéricos)
     resolver     = Resolver(asm_code)
     resolved_asm = resolver.resolve()
 
     if args.asm:
         print('\n=== ASM RESUELTO ===\n')
         print(resolved_asm)
-
-        # Mostrar tabla de etiquetas si se pidió debug
         if args.etiquetas:
             print('\n=== TABLA DE ETIQUETAS (Resolver) ===')
             for label, addr in resolver.get_label_table().items():
                 print(f'  {label:<30} 0x{addr:04X}')
 
-    # Guardar ASM si se pidió output y se generó ASM
     if args.output and args.asm:
-        asm_path = base_name + '.asm'
-        with open(asm_path, 'w', encoding='utf-8') as f:
+        with open(base_name + '.asm', 'w', encoding='utf-8') as f:
             f.write(asm_code)
-        print(f'\nASM guardado en: {asm_path}')
+        print(f'\nASM guardado en: {base_name}.asm')
 
-    # Fase 6: Generación de binario
     if args.binario:
-        hex_path = (base_name + '.mem') if args.hex else None
-        bin_path = base_name + '.bin'
-
         bg = BinaryGen(resolved_asm)
-        ok = bg.generate(bin_path, hex_path)
-
+        ok = bg.generate(base_name + '.bin',
+                         (base_name + '.mem') if args.hex else None)
         if not ok:
             print('\nFalló la generación del binario.')
             return 1

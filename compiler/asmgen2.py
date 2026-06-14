@@ -41,6 +41,7 @@ _RE_ASSIGN      = re.compile(r'^(\w[\w.]*)\s*=\s*(.+)$')
 _RE_SAVE        = re.compile(r'^save\s+(\w+)$')
 _RE_COMMENT     = re.compile(r'^#')
 _RE_LOOP_ANN    = re.compile(r'^LOOP_')
+_RE_COPY_START  = re.compile(r'^#copia\s+\d+$')  # marca de copia del unroller
 
 
 class AsmGen2:
@@ -62,6 +63,12 @@ class AsmGen2:
 
         # Cola de params pendientes para la próxima call
         self._param_buf = []
+
+        # Snapshot del frame al inicio del cuerpo del loop (para unrolling).
+        # Cuando asmgen2 ve "#copia N", restaura _locals y _frame_sz a este
+        # snapshot para que cada copia del unroll vea los mismos offsets.
+        self._loop_frame_snapshot = None   # None = no estamos en unroll
+        self._loop_sp_delta       = 0      # bytes que el SP bajó desde el snapshot
 
         # Contador para etiquetas sintéticas (mul, div, etc.)
         self._lbl_count = 0
@@ -165,6 +172,28 @@ class AsmGen2:
     # ─────────────────────────────────────────────────────────────────────
 
     def _translate_line(self, s: str):
+        # #copia N marca el inicio de cada copia del unroller.
+        # Restauramos el snapshot del frame para que los offsets de las
+        # variables persistentes (i, res...) sean correctos en cada copia.
+        if _RE_COPY_START.match(s):
+            if self._loop_frame_snapshot is not None:
+                # Emitir addi r2, r2, +delta para restaurar SP al nivel del snapshot
+                delta = self._loop_sp_delta
+                if delta > 0:
+                    self._emit(f"addi r2, r2, {delta}")
+                # Restaurar _locals y _frame_sz al estado del snapshot
+                self._locals   = dict(self._loop_frame_snapshot['locals'])
+                self._frame_sz = self._loop_frame_snapshot['frame_sz']
+                self._loop_sp_delta = 0
+            else:
+                # Primera copia: tomar el snapshot del estado actual del frame
+                self._loop_frame_snapshot = {
+                    'locals':   dict(self._locals),
+                    'frame_sz': self._frame_sz,
+                }
+                self._loop_sp_delta = 0
+            return
+
         if not s or _RE_COMMENT.match(s) or _RE_LOOP_ANN.match(s):
             return  # ignorar comentarios y anotaciones del optimizador
 
@@ -233,9 +262,13 @@ class AsmGen2:
         self._locals   = {}
         self._frame_sz = 0
         self._param_buf = []
+        self._loop_frame_snapshot = None  # limpiar snapshot al entrar en función
+        self._loop_sp_delta       = 0
         self._emit_label(name)
 
     def _on_end_func(self, name):
+        self._loop_frame_snapshot = None  # limpiar snapshot al salir de función
+        self._loop_sp_delta       = 0
         # Epílogo implícito si no se emitió jr r1
         last = next((l for l in reversed(self.code) if l.strip()), "")
         if last not in ("jr r1",):
@@ -390,25 +423,34 @@ class AsmGen2:
         self._emit_label(lend)
 
     def _emit_mul(self, dest, left, right):
-        # Usa r3 como contador y r0 como acumulador fijo para no agotar el pool
-        r_a   = self._load_value(left)
-        r_b   = self._load_value(right)
-        r_res = self._alloc()
+        r_a   = self._load_value(left)   # 1 temporal
+        r_res = self._alloc()            # 1 temporal → máx 2 en uso simultáneo
         n     = self._lbl_count; self._lbl_count += 1
         lloop = f"mul_loop_{n}"
         lend  = f"mul_end_{n}"
-        # r3 = contador (no es temporal, no necesita alloc)
-        # r_res = acumulador resultado
+
+        # Guardar r3 en stack antes de usarlo como contador
+        self._emit("addi r2, r2, -4")
+        self._emit("store r3, 0(r2)")
+        self._adjust_locals(+WORD)
+
+        r_b = self._load_value(right)    # cargar b DESPUÉS de guardar r3
+        self._emit(f"add  r3, {r_b}, r0")
+        self._free_if_temp(r_b)          # liberar inmediato → pool vuelve a 2 libres
+
         self._emit(f"addi {r_res}, r0, 0")
-        self._emit(f"add  r3, {r_b}, r0")       # r3 = b (contador)
-        self._emit(f"addi r3, r3, 0")            # nop para alineación
-        self._free_if_temp(r_b)                  # liberar b ya copiado en r3
         self._emit_label(lloop)
         self._emit(f"beq  r3, r0, {lend}")
         self._emit(f"add  {r_res}, {r_res}, {r_a}")
         self._emit(f"addi r3, r3, -1")
         self._emit(f"jal  r0, {lloop}")
         self._emit_label(lend)
+
+        # Restaurar r3
+        self._emit("load r3, 0(r2)")
+        self._emit("addi r2, r2, 4")
+        self._adjust_locals(-WORD)
+
         self._free_if_temp(r_a)
         self._store_var(dest, r_res)
         self._free_if_temp(r_res)
@@ -633,6 +675,9 @@ class AsmGen2:
             self._adjust_locals(+WORD, exclude=name)
             self._locals[name] = 0
             self._frame_sz    += WORD
+            # Trackear cuánto bajó el SP desde el último snapshot de copia
+            if self._loop_frame_snapshot is not None:
+                self._loop_sp_delta += WORD
             self._emit(f"store {reg}, 0(r2)")
             return
 
