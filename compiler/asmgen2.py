@@ -111,8 +111,14 @@ class AsmGen2:
     # ─────────────────────────────────────────────────────────────────────
 
     def _discover_globals(self, lines):
-        """Registra variables asignadas fuera de funciones con dirección."""
+        """Registra variables asignadas fuera de funciones con dirección.
+        También detecta variables globales que aparecen dentro de funciones
+        (cuando el DCE eliminó su inicialización global pero aún se usan).
+        """
         in_func = False
+        pending_alloc = {}  # nombre temporal → tamaño del alloc
+
+        # Pasada 1: globals explícitos (fuera de funciones)
         for line in lines:
             s = line.strip()
             if _RE_BEGIN_FUNC.match(s):
@@ -120,13 +126,46 @@ class AsmGen2:
             elif _RE_END_FUNC.match(s):
                 in_func = False
             elif not in_func and not _RE_COMMENT.match(s) and not _RE_LOOP_ANN.match(s):
-                # var = algo  (global)
+                m = _RE_ALLOC.match(s)
+                if m:
+                    pending_alloc[m.group(1)] = int(m.group(2))
+                    continue
                 m = _RE_ASSIGN.match(s)
                 if m:
                     name = m.group(1)
+                    src  = m.group(2).strip()
                     if name not in self._globals and name != 'mem':
-                        self._globals[name] = self._global_ptr
-                        self._global_ptr += 1
+                        if src in pending_alloc:
+                            size = pending_alloc[src]
+                            self._globals[name] = self._global_ptr
+                            self._global_ptr   += size
+                            self._globals[src]  = self._globals[name]
+                        else:
+                            self._globals[name] = self._global_ptr
+                            self._global_ptr   += 1
+
+        # Pasada 2: detectar variables usadas dentro de funciones
+        # que no aparecen fuera — tanto globales reales como temporales del IR
+        in_func = False
+        for line in lines:
+            s = line.strip()
+            if _RE_BEGIN_FUNC.match(s):
+                in_func = True
+                continue
+            elif _RE_END_FUNC.match(s):
+                in_func = False
+                continue
+            if not in_func:
+                continue
+            # Dentro de función: registrar TODAS las asignaciones que no
+            # están ya en globals (incluyendo temporales t1, t2, t__v0_3, etc.)
+            # Esto evita que los temporales vayan al stack y rompan el frame.
+            m = _RE_ASSIGN.match(s)
+            if m:
+                name = m.group(1)
+                if name not in self._globals and name != 'mem':
+                    self._globals[name] = self._global_ptr
+                    self._global_ptr   += 1
 
     # ─────────────────────────────────────────────────────────────────────
     #  Pasada 2a: inicializar globals
@@ -228,10 +267,11 @@ class AsmGen2:
     # ─────────────────────────────────────────────────────────────────────
 
     def _on_begin_func(self, name):
-        self._func     = name
-        self._params   = []
-        self._locals   = {}
-        self._frame_sz = 0
+        self._func      = name
+        self._params    = []
+        self._locals    = {}
+        self._frame_sz  = 0      # bytes totales reservados en el stack de esta función
+        self._sp_delta  = 0      # delta real del SP desde el inicio de la función
         self._param_buf = []
         self._emit_label(name)
 
@@ -242,10 +282,11 @@ class AsmGen2:
             if self._frame_sz > 0:
                 self._emit(f"addi r2, r2, {self._frame_sz}")
             self._emit("jr r1")
-        self._func     = None
-        self._params   = []
-        self._locals   = {}
-        self._frame_sz = 0
+        self._func      = None
+        self._params    = []
+        self._locals    = {}
+        self._frame_sz  = 0
+        self._sp_delta  = 0
 
     def _on_fparam(self, name):
         """Registra un parámetro formal de la función.
@@ -304,7 +345,6 @@ class AsmGen2:
     def _on_return(self, val):
         if val is not None:
             val = val.strip()
-            # Si el valor es una expresión binaria (ej: n * r, a + b)
             m = re.match(
                 r'^(.+?)\s*(==|!=|<=|>=|<<|>>|\*\*|[+\-*/%<>|&^])\s*(.+)$',
                 val
@@ -313,20 +353,18 @@ class AsmGen2:
                 left  = m.group(1).strip()
                 op    = m.group(2)
                 right = m.group(3).strip()
-                # Usar temporal interno para calcular la expresión
                 tmp = "__ret_tmp__"
                 self._on_binop(tmp, left, op, right)
                 r = self._load_value(tmp)
                 self._emit(f"add r4, {r}, r0")
                 self._free_if_temp(r)
-                # Limpiar el temporal del frame
                 if tmp in self._locals:
                     del self._locals[tmp]
-                    self._frame_sz -= WORD
             else:
                 r = self._load_value(val)
                 self._emit(f"add r4, {r}, r0")
                 self._free_if_temp(r)
+        # Calcular frame real desde _frame_sz
         if self._frame_sz > 0:
             self._emit(f"addi r2, r2, {self._frame_sz}")
         self._emit("jr r1")
@@ -336,6 +374,12 @@ class AsmGen2:
     # ─────────────────────────────────────────────────────────────────────
 
     def _on_assign(self, dest, src):
+        # Si ambos son globals y el src es un temporal de alloc que apunta
+        # a la misma dirección que dest, es una asignación de puntero — no-op
+        if (self._func is None and
+                dest in self._globals and src in self._globals and
+                self._globals.get(dest) == self._globals.get(src)):
+            return
         r = self._load_value(src)
         self._store_var(dest, r)
         self._free_if_temp(r)
@@ -474,7 +518,21 @@ class AsmGen2:
     # ─────────────────────────────────────────────────────────────────────
 
     def _on_alloc(self, dest, size):
-        """t = alloc N  →  reservar N palabras en el stack."""
+        """t = alloc N
+        - Dentro de función  → reservar N palabras en el stack
+        - Fuera de función   → el array ya tiene dirección global asignada,
+                               solo registramos el temporal como alias
+        """
+        if self._func is None:
+            # Global: la dirección ya fue asignada en _discover_globals
+            # Registrar dest como alias de su dirección global
+            if dest not in self._globals:
+                self._globals[dest] = self._global_ptr
+                self._global_ptr   += size
+            # No hacer nada más — los array_set llenarán la memoria global
+            return
+
+        # Local: reservar en el stack
         bytes_ = size * WORD
         self._emit(f"addi r2, r2, -{bytes_}")
         self._adjust_locals(+bytes_, exclude=dest)
@@ -627,8 +685,16 @@ class AsmGen2:
             self._emit(f"store {reg}, {offset}(r2)")
             return
 
-        # Si es local nueva, reservar en el stack
-        if self._func is not None and name not in self._globals:
+        # Si es global, guardar en memoria global (aunque estemos dentro de una función)
+        if name in self._globals:
+            addr   = self._globals[name]
+            r_addr = self._load_immediate(addr * WORD)
+            self._emit(f"store {reg}, 0({r_addr})")
+            self._free_if_temp(r_addr)
+            return
+
+        # Si es local nueva (no existe como global), reservar en el stack
+        if self._func is not None:
             self._emit("addi r2, r2, -4")
             self._adjust_locals(+WORD, exclude=name)
             self._locals[name] = 0
@@ -636,10 +702,9 @@ class AsmGen2:
             self._emit(f"store {reg}, 0(r2)")
             return
 
-        # Global
-        if name not in self._globals:
-            self._globals[name] = self._global_ptr
-            self._global_ptr   += 1
+        # Global nueva
+        self._globals[name] = self._global_ptr
+        self._global_ptr   += 1
         addr   = self._globals[name]
         r_addr = self._load_immediate(addr * WORD)
         self._emit(f"store {reg}, 0({r_addr})")
