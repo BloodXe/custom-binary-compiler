@@ -1,0 +1,20 @@
+var total : int = 0'
+var len : int = 4'
+var res : int = 0'
+var bloque : [4]int = [10, 20, 30, 40]'
+var i : int = 0'
+var temp : int = 0'
+
+func procesar() :: void {
+    para (i = 0' i < len' i = i + 1') {
+        temp = bloque[i] * 2'
+        res = res + temp'
+    }
+    total = res'
+    save(total)'
+}
+
+func main() :: void {
+    procesar()'
+    save(total)'
+}

@@ -1,0 +1,51 @@
+# Test: Reordenamiento de instrucciones
+# Dentro del si, log/promedio/ajuste/resultado son independientes entre sí
+# El reordenador detecta que pueden ejecutarse antes o en paralelo
+
+var total : int = 0'
+
+func analizar(d0 : int, d1 : int, d2 : int) :: int {
+    var i : int = 0'
+    var lectura : int = 0'
+
+    # Bloque 1 — log es independiente de promedio/ajuste/resultado
+    lectura = d0'
+    var log0     : int = i * 100'
+    var promedio0 : int = lectura * 2'
+    var ajuste0   : int = promedio0 + 10'
+    var resultado0 : int = ajuste0 * 3'
+    si (lectura > 50) {
+        total = total + resultado0'
+    }
+
+    # Bloque 2
+    i = i + 1'
+    lectura = d1'
+    var log1      : int = i * 100'
+    var promedio1 : int = lectura * 2'
+    var ajuste1   : int = promedio1 + 10'
+    var resultado1 : int = ajuste1 * 3'
+    si (lectura > 50) {
+        total = total + resultado1'
+    }
+
+    # Bloque 3
+    i = i + 1'
+    lectura = d2'
+    var log2      : int = i * 100'
+    var promedio2 : int = lectura * 2'
+    var ajuste2   : int = promedio2 + 10'
+    var resultado2 : int = ajuste2 * 3'
+    si (lectura > 50) {
+        total = total + resultado2'
+    }
+
+    retorna total'
+}
+
+func main() :: void {
+    var r : int = 0'
+    r = analizar(30, 60, 80)'
+    save(r)'
+    save(total)'
+}

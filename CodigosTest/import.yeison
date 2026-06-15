@@ -1,5 +1,8 @@
 importar suma'
+var resultado : int = 0'
 
-var x : int = 0'
+func main()::void{
 
-x = suma.suma(4, 5)'
+    resultado = suma.suma(5, 1)'
+
+}

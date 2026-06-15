@@ -1,0 +1,40 @@
+importar Test2'
+
+var suma : int = 0'
+var multiplicacion : int = 1'
+var resultado_suma : int = 0'
+var resultado_mul : int = 0'
+
+
+func sumeMayores() :: void {
+    var valorMaximo : int = 0'
+    var continuar : int = 1'
+
+    mientras (continuar == 1) {
+        valorMaximo = Test2.maximo_lista()'
+
+        si (valorMaximo == 10) {
+            valorMaximo = valorMaximo + valorMaximo'
+        }
+
+        suma = suma + valorMaximo'
+        multiplicacion = multiplicacion + valorMaximo'
+
+        si (multiplicacion > 500) {
+            multiplicacion = 10'
+        } sino {
+            multiplicacion = multiplicacion - 10'
+        }
+
+        si (suma >= 100) {
+            continuar = 0'
+        }
+    }
+
+    resultado_suma = suma'
+    resultado_mul = multiplicacion'
+}
+
+func main() :: void {
+    sumeMayores()'
+}

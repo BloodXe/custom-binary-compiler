@@ -1,0 +1,22 @@
+
+var mx : int = 0'
+
+func maximo_lista() :: int {
+    var datos : int = [3, 4, 5, 24, 5, -6, 46]'
+    var tam : int = 7'
+    var maximo : int = 0'
+    var i : int = 0'
+    maximo = datos[0]'
+    i = 1'
+    mientras (i < tam) {
+        si (datos[i] > maximo) {
+            maximo = datos[i]'
+        }
+        i = i + 1'
+    }
+    retorna maximo'
+}
+
+func main() :: void {
+    mx = maximo_lista()'
+}

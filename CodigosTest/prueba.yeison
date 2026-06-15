@@ -1,3 +1,0 @@
-const DELTA : uint = 0x9E3779B9'
-func main() :: void {
-}

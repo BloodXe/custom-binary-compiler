@@ -1,0 +1,5 @@
+var contador : int = 0'
+var nombre : string = "Jimena"'
+
+func sumar(a:int,b:int)::int {
+}

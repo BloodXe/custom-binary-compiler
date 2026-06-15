@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos generados por el compilador
+*.bin
+*.mem
+*.hex
+
+# Archivos de entorno virtual
+venv/
+env/
+.env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
