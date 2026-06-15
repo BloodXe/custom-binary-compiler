@@ -11,7 +11,7 @@ var c01 : int = 0'
 
 
 func multiplicar(a : int, b : int) :: int {
-    
+    res = 0'
     para (i = 0' i < b' i = i + 1') {
         res = res + a'
     }
