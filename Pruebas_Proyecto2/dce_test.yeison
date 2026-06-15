@@ -3,10 +3,15 @@
 # El DCE con CFG las debe eliminar completamente
 
 var total_operaciones : int = 0'
+var res : int = 0'
+var i : int = 0'
+var suma : int = 0'
+var c00 : int = 0'
+var c01 : int = 0'
+
 
 func multiplicar(a : int, b : int) :: int {
-    var res : int = 0'
-    var i : int = 0'
+    
     para (i = 0' i < b' i = i + 1') {
         res = res + a'
     }
@@ -19,7 +24,6 @@ func calcular(a : int, b : int) :: int {
     var basura1  : int = a + b'
 
     # Cálculo real
-    var suma : int = 0'
     suma = multiplicar(a, b)'
     total_operaciones = total_operaciones + 1'
 
@@ -31,8 +35,6 @@ func calcular(a : int, b : int) :: int {
 }
 
 func main() :: void {
-    var c00 : int = 0'
-    var c01 : int = 0'
 
     c00 = calcular(3, 4)'
     c01 = calcular(2, 5)'

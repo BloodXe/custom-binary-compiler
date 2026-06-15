@@ -50,6 +50,10 @@ class AsmGen:
         # Contador para etiquetas de multiplicación (evita colisiones)
         self._mul_count      = 0
 
+        # Mapa de memoria global para generar mem_init.mem
+        # word_address -> value
+        self._global_mem     = {}
+
     # Funcion principal de generación de código: recibe el AST completo y retorna el código ensamblador como string
     def generate(self, ast) -> str:
         """
@@ -1013,22 +1017,35 @@ class AsmGen:
         sym  = self.semantic.symbol_table.lookup(name)
         addr = sym.address if sym else 0
 
-        # Si es un array (list literal), almacenamos cada elemento contiguamente en memoria (dirección base, base+4, base+8, ...)
         if is_array:
-            # Para un array, evaluamos cada elemento y lo almacenamos contiguamente en memoria (dirección base, base+4, base+8, ...)
             for i, elem in enumerate(value_node.elements):
-                r = self.visit(elem) # Evaluar el elemento del array y obtener su valor en un registro
+                r = self.visit(elem)
                 r_addr = self.load_immediate((addr + i) * 4)
                 self._emit(f"store {r}, 0({r_addr})")
+                # Registrar valor literal para mem_init.mem
+                if hasattr(elem, 'value') and isinstance(elem.value, int):
+                    self._global_mem[addr + i] = elem.value & 0xFFFFFFFF
                 self._free_if_temp(r)
                 self._free_reg(r_addr)
-        # Para una variable simple, evaluamos su valor y lo almacenamos en la dirección absoluta correspondiente en memoria
         else:
-            r = self.visit(value_node) # Evaluar el valor de la variable y obtenerlo en un registro
+            r = self.visit(value_node)
             r_addr = self.load_immediate(addr * 4)
             self._emit(f"store {r}, 0({r_addr})")
+            # Registrar valor literal para mem_init.mem
+            if hasattr(value_node, 'value') and isinstance(value_node.value, int):
+                self._global_mem[addr] = value_node.value & 0xFFFFFFFF
             self._free_if_temp(r)
             self._free_reg(r_addr)
+
+    def generate_mem_init(self, output_path: str, mem_size: int = 16384):
+        """Genera mem_init.mem con las variables globales pre-inicializadas."""
+        mem = [0] * mem_size
+        for word_addr, value in self._global_mem.items():
+            if 0 <= word_addr < mem_size:
+                mem[word_addr] = value & 0xFFFFFFFF
+        with open(output_path, 'w') as f:
+            for v in mem:
+                f.write(f"{v:08x}\n")
 
     # Asignación: para asignar un valor a una variable, primero evaluamos el valor a asignar, luego determinamos si el destino es 
     # una variable local (en cuyo caso almacenamos en el frame) o global (en cuyo caso almacenamos en memoria absoluta),

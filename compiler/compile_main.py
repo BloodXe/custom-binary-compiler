@@ -315,9 +315,15 @@ Ejemplos:
 
     # Generación de ASM
     if any_opt and opt_ir:
-        asm_code = AsmGen2().generate(opt_ir)
+        asm_gen  = AsmGen2()
+        asm_code = asm_gen.generate(opt_ir)
     else:
-        asm_code = AsmGen(sem).generate(ast)
+        asm_gen  = AsmGen(sem)
+        asm_code = asm_gen.generate(ast)
+        # Generar mem_init.mem junto al instructions.mem
+        mem_init_path = base_name + '_mem_init.mem'
+        asm_gen.generate_mem_init(mem_init_path)
+        print(f'mem_init generado en: {mem_init_path}')
 
     if args.asm:
         print('\n=== ASM GENERADO ===\n')
